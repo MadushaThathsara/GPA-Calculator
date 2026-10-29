@@ -1,0 +1,35 @@
+{
+  "name": "gpa-calculator",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "GPA Calculator and Academic Performance Tracker – static, client-side, no server.",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint . --ext ts,tsx --report-unused-disable-directives --max-warnings 0",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "pdfjs-dist": "^4.10.38",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "recharts": "^2.15.3",
+    "tesseract.js": "^5.1.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.50.1",
+    "@types/node": "^26.6.5",
+    "@types/react": "^18.3.31",
+    "@types/react-dom": "^18.3.7",
+    "@vitejs/plugin-react": "^4.7.0",
+    "@vitest/coverage-v8": "^3.1.4",
+    "typescript": "^5.7.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.1.4"
+  }
+}
