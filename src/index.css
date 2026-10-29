@@ -315,6 +315,106 @@ code  { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.875e
   margin-top: 1.5rem;
 }
 
+/* ── Course Summary Card ─────────────────────────────────────────────────── */
+.course-summary-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-around;
+  padding: 0.875rem 1rem;
+  margin-bottom: 0.5rem;
+  background: rgba(99, 102, 241, 0.08);
+  border: 1px solid rgba(99, 102, 241, 0.22);
+  border-radius: var(--r-md);
+  text-align: center;
+}
+
+.course-summary-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.2rem;
+}
+
+.course-summary-value {
+  font-size: 1.5rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.course-summary-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.course-summary-divider {
+  width: 1px;
+  height: 32px;
+  background: rgba(255, 255, 255, 0.12);
+}
+
+/* ── Green / Red Module Dot Toggle Button ────────────────────────────────── */
+.module-dot-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  transition: transform var(--t-fast), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+}
+
+.module-dot-btn:hover {
+  transform: scale(1.15);
+}
+
+.module-dot-btn:focus-visible {
+  outline: 2px solid var(--accent-1);
+  outline-offset: 2px;
+  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.35);
+}
+
+.module-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--r-full);
+  display: block;
+  transition: background-color var(--t-base), box-shadow var(--t-base), transform var(--t-fast);
+}
+
+.module-dot-btn:active .module-dot {
+  transform: scale(0.85);
+}
+
+.module-dot-btn--green .module-dot {
+  background-color: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.65);
+}
+
+.module-dot-btn--green:hover {
+  border-color: rgba(16, 185, 129, 0.5);
+  background: rgba(16, 185, 129, 0.12);
+}
+
+.module-dot-btn--red .module-dot {
+  background-color: #ef4444;
+  box-shadow: 0 0 8px rgba(239, 68, 68, 0.65);
+}
+
+.module-dot-btn--red:hover {
+  border-color: rgba(239, 68, 68, 0.5);
+  background: rgba(239, 68, 68, 0.12);
+}
+
 .sheet-item {
   display: flex;
   align-items: center;

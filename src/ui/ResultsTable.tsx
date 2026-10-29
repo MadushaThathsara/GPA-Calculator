@@ -28,27 +28,31 @@ interface ResultsTableProps {
   cgpaTotalCredits: number;
   classification: string | null;
   isLatest?: boolean;
+  moduleExclusions?: Record<string, boolean>;
   onSetManualCredit?: (moduleCode: string, credits: number) => void;
   onToggleExclude?: (indexNumber: string, moduleCode: string) => void;
+  onToggleModule?: (moduleCode: string) => void;
   studentIndexNumber: string;
 }
 
 const ResultsTable: FC<ResultsTableProps> = ({
   result,
   cgpa,
-  cgpaModuleCount,
-  cgpaTotalCredits,
+  cgpaModuleCount: _cgpaModuleCount,
+  cgpaTotalCredits: _cgpaTotalCredits,
   classification,
   isLatest = false,
+  moduleExclusions: _moduleExclusions,
   onSetManualCredit,
   onToggleExclude,
+  onToggleModule,
   studentIndexNumber,
 }) => {
   const [open, setOpen] = useState(true);
   const [editingCreditModule, setEditingCreditModule] = useState<string | null>(null);
   const [tempCreditVal, setTempCreditVal] = useState<string>('');
 
-  const { rows, sgpa, moduleCount, totalCredits } = result;
+  const { rows, sgpa } = result;
 
   const startEditCredit = (moduleCode: string, currentCredits: number) => {
     setEditingCreditModule(moduleCode);
@@ -97,7 +101,7 @@ const ResultsTable: FC<ResultsTableProps> = ({
               )}
             </div>
             <p className="semester-header__session">
-              {moduleCount} module{moduleCount !== 1 ? 's' : ''} &nbsp;·&nbsp; {totalCredits} GPA credits
+              Total Modules: {result.totalModules} &nbsp;·&nbsp; Total Course Credits: {result.totalCourseCredits}
             </p>
           </div>
         </div>
@@ -119,7 +123,7 @@ const ResultsTable: FC<ResultsTableProps> = ({
               </span>
             )}
             <span className="stat-chip stat-chip--modules">
-              {moduleCount}M / {totalCredits}cr
+              {result.totalModules}M / {result.totalCourseCredits}cr
             </span>
           </div>
 
@@ -143,7 +147,7 @@ const ResultsTable: FC<ResultsTableProps> = ({
             <table className="results-table" aria-label={`Results for ${result.semesterName}`}>
               <thead>
                 <tr>
-                  <th scope="col" style={{ width: '40px', textAlign: 'center' }}>Incl.</th>
+                  <th scope="col" style={{ width: '44px', textAlign: 'center' }}>GPA</th>
                   <th scope="col">Module Code</th>
                   <th scope="col">GPA Cr.</th>
                   <th scope="col">Grade</th>
@@ -163,16 +167,24 @@ const ResultsTable: FC<ResultsTableProps> = ({
                       key={row.indexNumber + row.moduleCode}
                       style={{ opacity: excluded ? 0.65 : 1 }}
                     >
-                      {/* Include / Exclude Checkbox */}
+                      {/* Green / Red Module Selection Toggle */}
                       <td style={{ textAlign: 'center' }}>
-                        <input
-                          type="checkbox"
-                          checked={!isUserExcluded}
-                          onChange={() => onToggleExclude?.(studentIndexNumber, row.moduleCode)}
-                          title={isUserExcluded ? 'Click to include in GPA' : 'Click to exclude from GPA'}
-                          style={{ cursor: 'pointer', accentColor: 'var(--accent-2)' }}
-                          aria-label={`Include ${row.moduleCode} in GPA`}
-                        />
+                        <button
+                          type="button"
+                          className={`module-dot-btn ${isUserExcluded ? 'module-dot-btn--red' : 'module-dot-btn--green'}`}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (onToggleModule) {
+                              onToggleModule(row.moduleCode);
+                            } else {
+                              onToggleExclude?.(studentIndexNumber, row.moduleCode);
+                            }
+                          }}
+                          aria-label={`${row.moduleCode} is ${isUserExcluded ? 'excluded from' : 'included in'} GPA calculations. Click to ${isUserExcluded ? 'include' : 'exclude'}.`}
+                          title={`${row.moduleCode}: ${isUserExcluded ? 'Excluded from GPA (Click to include)' : 'Included in GPA (Click to exclude)'}`}
+                        >
+                          <span className="module-dot" aria-hidden="true" />
+                        </button>
                       </td>
 
                       {/* Module Code & Course Name */}
@@ -363,7 +375,7 @@ const ResultsTable: FC<ResultsTableProps> = ({
             <div className="gpa-stat">
               <div className="gpa-stat__value">{formatSgpa(sgpa)}</div>
               <div className="gpa-stat__label">Semester GPA (SGPA)</div>
-              <div className="gpa-stat__note">from {moduleCount} modules / {totalCredits} GPA credits</div>
+              <div className="gpa-stat__note">Semester Total: {result.totalModules} modules / {result.totalCourseCredits} credits</div>
             </div>
 
             {isLatest && (
@@ -371,7 +383,7 @@ const ResultsTable: FC<ResultsTableProps> = ({
                 <div className="gpa-stat">
                   <div className="gpa-stat__value">{cgpa.toFixed(2)}</div>
                   <div className="gpa-stat__label">Cumulative GPA (CGPA)</div>
-                  <div className="gpa-stat__note">from {cgpaModuleCount} modules / {cgpaTotalCredits} GPA credits</div>
+                  <div className="gpa-stat__note">calculated from GPA-eligible modules</div>
                 </div>
 
                 {classification && (

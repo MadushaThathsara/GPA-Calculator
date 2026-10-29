@@ -37,6 +37,8 @@ interface PendingDuplicate {
 const App: FC = () => {
   const {
     sheets,
+    moduleExclusions,
+    toggleModule,
     addSheet,
     replaceSheet,
     removeSheet,
@@ -188,6 +190,8 @@ const App: FC = () => {
 
                 <SheetsList
                   sheets={sheets}
+                  moduleExclusions={moduleExclusions}
+                  onToggleModule={toggleModule}
                   onRemove={removeSheet}
                   onClearAll={clearSession}
                   onUpdateSession={updateExamSession}
@@ -293,8 +297,10 @@ const App: FC = () => {
                 {searchResult && (
                   <StudentResults
                     result={searchResult}
+                    moduleExclusions={moduleExclusions}
                     onSetManualCredit={handleSetManualCredit}
                     onToggleExclude={handleToggleExclude}
+                    onToggleModule={toggleModule}
                   />
                 )}
 

@@ -94,6 +94,8 @@ export interface SemesterResult {
   sgpa: number;
   moduleCount: number;
   totalCredits: number;
+  totalCourseCredits: number;
+  totalModules: number;
 }
 
 /** Full search result for a student. */
@@ -103,12 +105,15 @@ export interface StudentSearchResult {
   cgpa: number;
   cgpaModuleCount: number;
   cgpaTotalCredits: number;
+  totalCourseCredits: number;
+  totalModules: number;
   classification: string | null;
 }
 
 const STORAGE_KEY = 'gpa_calc_session_sheets_v2';
 const MANUAL_CREDITS_KEY = 'gpa_calc_session_credits_v2';
 const EXCLUSIONS_KEY = 'gpa_calc_session_exclusions_v2';
+const MODULE_EXCLUSIONS_KEY = 'gpa_calc_session_module_exclusions_v2';
 
 // ---------------------------------------------------------------------------
 // Pure Helpers
@@ -117,6 +122,35 @@ const EXCLUSIONS_KEY = 'gpa_calc_session_exclusions_v2';
 /** Standardize search queries and index numbers for match comparison */
 export function normalizeIndex(raw: string): string {
   return raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+}
+
+/** Normalize module codes for consistent exclusion and mapping (e.g. "IIC 1123" -> "IIC1123") */
+export function normalizeModuleCode(raw: string): string {
+  return raw.toUpperCase().replace(/\s+/g, '');
+}
+
+/**
+ * Calculates total course credits and total modules across loaded sheets.
+ * Includes both GPA and Non-GPA modules regardless of exclusion state.
+ */
+export function calculateCourseSummary(
+  sheets: MockSheet[],
+  manualCredits: Record<string, number> = {},
+): { totalCourseCredits: number; totalModules: number } {
+  const distinct = new Map<string, number>();
+  for (const sheet of sheets) {
+    const norm = normalizeModuleCode(sheet.courseCode);
+    if (!distinct.has(norm)) {
+      const manualCr = manualCredits[norm] ?? manualCredits[sheet.courseCode.toUpperCase()];
+      const inferredCr = creditFromCode(sheet.courseCode);
+      const credits = manualCr !== undefined ? manualCr : (inferredCr ?? 0);
+      distinct.set(norm, credits);
+    }
+  }
+  return {
+    totalCourseCredits: Array.from(distinct.values()).reduce((sum, cr) => sum + cr, 0),
+    totalModules: distinct.size,
+  };
 }
 
 /**
@@ -130,9 +164,26 @@ export function calculateStudentSearch(
   config: UniversityConfig,
   manualCredits: Record<string, number> = {},
   userExclusions: Record<string, boolean> = {},
+  moduleExclusions: Record<string, boolean> = {},
 ): StudentSearchResult | null {
   const q = normalizeIndex(rawQuery);
   if (!q) return null;
+
+  // Normalize exclusion keys for robust matching across whitespace and formatting
+  const normModuleExclusions: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(moduleExclusions)) {
+    normModuleExclusions[normalizeModuleCode(k)] = v;
+  }
+
+  const normUserExclusions: Record<string, boolean> = {};
+  for (const [k, v] of Object.entries(userExclusions)) {
+    if (k.includes(':')) {
+      const [idx, m] = k.split(':');
+      normUserExclusions[`${normalizeIndex(idx)}:${normalizeModuleCode(m)}`] = v;
+    } else {
+      normUserExclusions[normalizeModuleCode(k)] = v;
+    }
+  }
 
   const originalSheets = sheets.filter((s) => s.type !== 'repeat-resit');
   const repeatSheets = sheets.filter((s) => s.type === 'repeat-resit');
@@ -200,7 +251,8 @@ export function calculateStudentSearch(
 
       for (const row of matchingRows) {
         const modCode = row.moduleCode.toUpperCase();
-        const manualCr = manualCredits[modCode];
+        const normCode = normalizeModuleCode(row.moduleCode);
+        const manualCr = manualCredits[normCode] ?? manualCredits[modCode];
         const inferredCr = creditFromCode(row.moduleCode);
         const credits = manualCr !== undefined ? manualCr : (inferredCr ?? 0);
         const manualCreditApplied = manualCr !== undefined;
@@ -236,10 +288,13 @@ export function calculateStudentSearch(
           });
         }
 
-        // Check user exclusion
-        const exclusionKey = `${normalizeIndex(row.indexNumber)}:${modCode}`;
-        const isUserExcluded = !!userExclusions[exclusionKey];
-        const excluded = effective.excluded || isUserExcluded;
+        // Check user & module exclusion (green/red dot toggle or student-level exclusion)
+        const exclusionKey = `${normalizeIndex(row.indexNumber)}:${normCode}`;
+        const isModuleExcluded =
+          !!normModuleExclusions[normCode] ||
+          !!normUserExclusions[normCode] ||
+          !!normUserExclusions[exclusionKey];
+        const excluded = effective.excluded || isModuleExcluded;
 
         const gpaGrade = effective.gpaGrade;
         const gpaPointsVal =
@@ -258,7 +313,7 @@ export function calculateStudentSearch(
           gpaPoints: gpaPointsVal,
           effectiveGrade: gpaGrade,
           excluded,
-          isUserExcluded,
+          isUserExcluded: isModuleExcluded,
           resitInfo,
         });
       }
@@ -276,6 +331,17 @@ export function calculateStudentSearch(
       config.gradeScale,
     );
 
+    // Total Course Credits and Total Modules include ALL modules in this semester (both GPA & Non-GPA, green or red)
+    const semDistinct = new Map<string, number>();
+    for (const item of semesterRowItems) {
+      const norm = normalizeModuleCode(item.row.moduleCode);
+      if (!semDistinct.has(norm)) {
+        semDistinct.set(norm, item.credits);
+      }
+    }
+    const semTotalModules = semDistinct.size;
+    const semTotalCourseCredits = Array.from(semDistinct.values()).reduce((sum, cr) => sum + cr, 0);
+
     semesters.push({
       sheet: group.sheets[0],
       sheets: group.sheets,
@@ -285,6 +351,8 @@ export function calculateStudentSearch(
       sgpa,
       moduleCount,
       totalCredits,
+      totalCourseCredits: semTotalCourseCredits,
+      totalModules: semTotalModules,
     });
   }
 
@@ -301,11 +369,15 @@ export function calculateStudentSearch(
           foundIndexNumber = matchingRepeatRows[0].indexNumber;
         }
         const rowItems: SemesterRowItem[] = matchingRepeatRows.map((r) => {
-          const manualCr = manualCredits[modCode];
+          const normCode = normalizeModuleCode(rSheet.courseCode);
+          const manualCr = manualCredits[normCode] ?? manualCredits[modCode];
           const inferredCr = creditFromCode(r.moduleCode);
           const credits = manualCr !== undefined ? manualCr : (inferredCr ?? 0);
-          const exclusionKey = `${normalizeIndex(r.indexNumber)}:${modCode}`;
-          const isUserExcluded = !!userExclusions[exclusionKey];
+          const exclusionKey = `${normalizeIndex(r.indexNumber)}:${normCode}`;
+          const isModuleExcluded =
+            !!normModuleExclusions[normCode] ||
+            !!normUserExclusions[normCode] ||
+            !!normUserExclusions[exclusionKey];
 
           const effective = effectiveResult({
             originalGrade: null,
@@ -315,7 +387,7 @@ export function calculateStudentSearch(
             config,
           });
 
-          const excluded = effective.excluded || isUserExcluded;
+          const excluded = effective.excluded || isModuleExcluded;
           const gpaGrade = effective.gpaGrade;
           const gpaPointsVal =
             excluded || gpaGrade === null
@@ -332,7 +404,7 @@ export function calculateStudentSearch(
             gpaPoints: gpaPointsVal,
             effectiveGrade: gpaGrade,
             excluded,
-            isUserExcluded,
+            isUserExcluded: isModuleExcluded,
             resitInfo: {
               originalGrade: null,
               originalStatus: null,
@@ -354,6 +426,16 @@ export function calculateStudentSearch(
           config.gradeScale,
         );
 
+        const semDistinct = new Map<string, number>();
+        for (const item of rowItems) {
+          const norm = normalizeModuleCode(item.row.moduleCode);
+          if (!semDistinct.has(norm)) {
+            semDistinct.set(norm, item.credits);
+          }
+        }
+        const semTotalModules = semDistinct.size;
+        const semTotalCourseCredits = Array.from(semDistinct.values()).reduce((sum, cr) => sum + cr, 0);
+
         semesters.push({
           sheet: rSheet,
           sheets: [rSheet],
@@ -363,6 +445,8 @@ export function calculateStudentSearch(
           sgpa,
           moduleCount,
           totalCredits,
+          totalCourseCredits: semTotalCourseCredits,
+          totalModules: semTotalModules,
         });
       }
     }
@@ -384,6 +468,19 @@ export function calculateStudentSearch(
     totalCredits: cgpaTotalCredits,
   } = calculateCgpa(allGpaInputs, config.gradeScale);
 
+  // Total Course Credits and Total Modules across all loaded semesters (GPA + Non-GPA, green or red)
+  const allDistinct = new Map<string, number>();
+  for (const s of semesters) {
+    for (const item of s.rows) {
+      const norm = normalizeModuleCode(item.row.moduleCode);
+      if (!allDistinct.has(norm)) {
+        allDistinct.set(norm, item.credits);
+      }
+    }
+  }
+  const totalModules = allDistinct.size;
+  const totalCourseCredits = Array.from(allDistinct.values()).reduce((sum, cr) => sum + cr, 0);
+
   const classification = classify(cgpa, config.classificationBands);
 
   return {
@@ -392,6 +489,8 @@ export function calculateStudentSearch(
     cgpa,
     cgpaModuleCount,
     cgpaTotalCredits,
+    totalCourseCredits,
+    totalModules,
     classification,
   };
 }
@@ -449,6 +548,18 @@ export function useSessionStore(config: UniversityConfig) {
     }
   });
 
+  const [moduleExclusions, setModuleExclusions] = useState<Record<string, boolean>>(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const saved = sessionStorage.getItem(MODULE_EXCLUSIONS_KEY);
+        return saved ? JSON.parse(saved) : {};
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  });
+
   // Sync to sessionStorage
   useEffect(() => {
     try {
@@ -479,6 +590,16 @@ export function useSessionStore(config: UniversityConfig) {
       // Ignore quota errors
     }
   }, [userExclusions]);
+
+  useEffect(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(MODULE_EXCLUSIONS_KEY, JSON.stringify(moduleExclusions));
+      }
+    } catch {
+      // Ignore quota errors
+    }
+  }, [moduleExclusions]);
 
   /** Check if a course code is already loaded in the session (M4 duplicate check) */
   const checkDuplicate = useCallback(
@@ -519,11 +640,13 @@ export function useSessionStore(config: UniversityConfig) {
     setSheets([]);
     setManualCredits({});
     setUserExclusions({});
+    setModuleExclusions({});
     try {
       if (typeof sessionStorage !== 'undefined') {
         sessionStorage.removeItem(STORAGE_KEY);
         sessionStorage.removeItem(MANUAL_CREDITS_KEY);
         sessionStorage.removeItem(EXCLUSIONS_KEY);
+        sessionStorage.removeItem(MODULE_EXCLUSIONS_KEY);
       }
     } catch {
       // Ignore
@@ -538,12 +661,26 @@ export function useSessionStore(config: UniversityConfig) {
     }));
   }, []);
 
-  /** Toggle user exclusion for a student's module (spec A6, M5) */
+  /** Toggle module-level inclusion/exclusion in GPA (green dot = include, red dot = exclude) */
+  const toggleModule = useCallback((moduleCode: string) => {
+    const norm = normalizeModuleCode(moduleCode);
+    setModuleExclusions((prev) => ({
+      ...prev,
+      [norm]: !prev[norm],
+    }));
+  }, []);
+
+  /** Toggle user exclusion for a student's module (supports module-level and student-level) */
   const toggleModuleExclusion = useCallback((indexNumber: string, moduleCode: string) => {
+    const norm = normalizeModuleCode(moduleCode);
     const key = `${normalizeIndex(indexNumber)}:${moduleCode.toUpperCase()}`;
     setUserExclusions((prev) => ({
       ...prev,
       [key]: !prev[key],
+    }));
+    setModuleExclusions((prev) => ({
+      ...prev,
+      [norm]: !prev[norm],
     }));
   }, []);
 
@@ -593,13 +730,15 @@ export function useSessionStore(config: UniversityConfig) {
   /** Search by index number */
   const searchStudent = useCallback(
     (rawQuery: string): StudentSearchResult | null => {
-      return calculateStudentSearch(sheets, rawQuery, config, manualCredits, userExclusions);
+      return calculateStudentSearch(sheets, rawQuery, config, manualCredits, userExclusions, moduleExclusions);
     },
-    [sheets, manualCredits, userExclusions, config],
+    [sheets, manualCredits, userExclusions, moduleExclusions, config],
   );
 
   return {
     sheets,
+    moduleExclusions,
+    toggleModule,
     addSheet,
     replaceSheet,
     removeSheet,

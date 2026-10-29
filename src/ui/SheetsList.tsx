@@ -8,9 +8,13 @@
 
 import { useState, type FC } from 'react';
 import type { MockSheet } from '../store/useSessionStore';
+import { calculateCourseSummary, normalizeModuleCode } from '../store/useSessionStore';
 
 interface SheetsListProps {
   sheets: MockSheet[];
+  moduleExclusions?: Record<string, boolean>;
+  onToggleModule?: (moduleCode: string) => void;
+  manualCredits?: Record<string, number>;
   onRemove: (id: string) => void;
   onClearAll?: () => void;
   onUpdateSession?: (id: string, newSession: string) => void;
@@ -19,6 +23,9 @@ interface SheetsListProps {
 
 const SheetsList: FC<SheetsListProps> = ({
   sheets,
+  moduleExclusions,
+  onToggleModule,
+  manualCredits,
   onRemove,
   onClearAll,
   onUpdateSession,
@@ -30,6 +37,8 @@ const SheetsList: FC<SheetsListProps> = ({
   const [tempYear, setTempYear] = useState<string>('');
 
   if (sheets.length === 0) return null;
+
+  const { totalCourseCredits, totalModules } = calculateCourseSummary(sheets, manualCredits);
 
   const startEdit = (sheet: MockSheet) => {
     setEditingId(sheet.id);
@@ -54,8 +63,21 @@ const SheetsList: FC<SheetsListProps> = ({
 
   return (
     <div className="sheets-list">
+      {/* ── Course Summary (Total Course Credits & Total Modules only) ── */}
+      <div className="course-summary-card" aria-label="Course Summary">
+        <div className="course-summary-item">
+          <div className="course-summary-value">{totalCourseCredits}</div>
+          <div className="course-summary-label">Total Course Credits</div>
+        </div>
+        <div className="course-summary-divider" aria-hidden="true" />
+        <div className="course-summary-item">
+          <div className="course-summary-value">{totalModules}</div>
+          <div className="course-summary-label">Total Modules</div>
+        </div>
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.5rem' }}>
-        <p className="section-label" style={{ margin: 0 }}>Loaded Sheets ({sheets.length})</p>
+        <p className="section-label" style={{ margin: 0 }}>Uploaded Files ({sheets.length})</p>
         {onClearAll && (
           <button
             type="button"
@@ -82,9 +104,25 @@ const SheetsList: FC<SheetsListProps> = ({
         const isEditing = editingId === sheet.id;
         const isResit = sheet.type === 'repeat-resit';
         const hasSession = !!sheet.examSession;
+        const normCode = normalizeModuleCode(sheet.courseCode);
+        const isExcluded = !!moduleExclusions?.[normCode] || !!moduleExclusions?.[sheet.courseCode.toUpperCase()];
+        const fileDisplayName = sheet.courseCode && sheet.courseName
+          ? `${sheet.courseCode}_${sheet.courseName.replace(/\s+/g, '_')}.pdf`
+          : sheet.displayName;
 
         return (
-          <div key={sheet.id} className="sheet-item">
+          <div key={sheet.id} className="sheet-item" style={{ opacity: isExcluded ? 0.75 : 1 }}>
+            {/* Green / Red Module Selection Toggle */}
+            <button
+              type="button"
+              className={`module-dot-btn ${isExcluded ? 'module-dot-btn--red' : 'module-dot-btn--green'}`}
+              onClick={() => onToggleModule?.(sheet.courseCode)}
+              aria-label={`${sheet.courseCode} is ${isExcluded ? 'excluded from' : 'included in'} GPA calculations. Click to ${isExcluded ? 'include' : 'exclude'}.`}
+              title={`${sheet.courseCode}: ${isExcluded ? 'Excluded from GPA (Click to include)' : 'Included in GPA (Click to exclude)'}`}
+            >
+              <span className="module-dot" aria-hidden="true" />
+            </button>
+
             <div
               className="sheet-item__icon"
               style={
@@ -99,8 +137,8 @@ const SheetsList: FC<SheetsListProps> = ({
 
             <div className="sheet-item__info">
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                <p className="sheet-item__name" title={sheet.displayName}>
-                  {sheet.displayName}
+                <p className="sheet-item__name" title={fileDisplayName}>
+                  {fileDisplayName}
                 </p>
                 {sheet.academicYear !== null && sheet.academicYear !== undefined ? (
                   <span
@@ -150,6 +188,22 @@ const SheetsList: FC<SheetsListProps> = ({
                     }}
                   >
                     Resit
+                  </span>
+                )}
+                {isExcluded && (
+                  <span
+                    style={{
+                      fontSize: '0.625rem',
+                      padding: '0.1rem 0.4rem',
+                      borderRadius: 'var(--r-full)',
+                      background: 'rgba(239,68,68,0.15)',
+                      color: 'var(--danger)',
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      fontWeight: 700,
+                    }}
+                    title="Excluded from GPA calculations"
+                  >
+                    Excluded from GPA
                   </span>
                 )}
                 {sheet.countMismatchWarning && (

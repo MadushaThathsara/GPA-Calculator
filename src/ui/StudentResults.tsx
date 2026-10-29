@@ -13,16 +13,20 @@ import type { StudentSearchResult } from '../store/useSessionStore';
 
 interface StudentResultsProps {
   result: StudentSearchResult;
+  moduleExclusions?: Record<string, boolean>;
   onSetManualCredit?: (moduleCode: string, credits: number) => void;
   onToggleExclude?: (indexNumber: string, moduleCode: string) => void;
+  onToggleModule?: (moduleCode: string) => void;
 }
 
 const StudentResults: FC<StudentResultsProps> = ({
   result,
+  moduleExclusions,
   onSetManualCredit,
   onToggleExclude,
+  onToggleModule,
 }) => {
-  const { indexNumber, semesters, cgpa, cgpaModuleCount, cgpaTotalCredits, classification } = result;
+  const { indexNumber, semesters, cgpa, classification } = result;
 
   return (
     <section aria-label={`Results for ${indexNumber}`} className="animate-in">
@@ -67,7 +71,7 @@ const StudentResults: FC<StudentResultsProps> = ({
           </p>
         </div>
 
-        {/* Overall stats badges */}
+        {/* Overall stats badges — Course Summary (Total Course Credits and Total Modules only, no separate GPA credits/modules) */}
         <div style={{ display: 'flex', gap: '0.625rem', flexWrap: 'wrap', alignItems: 'center' }}>
           <span className="stat-chip stat-chip--cgpa" style={{ fontSize: '0.8125rem', padding: '0.35rem 0.75rem' }}>
             CGPA {cgpa.toFixed(2)}
@@ -78,7 +82,10 @@ const StudentResults: FC<StudentResultsProps> = ({
             </span>
           )}
           <span className="stat-chip stat-chip--modules" style={{ fontSize: '0.8125rem', padding: '0.35rem 0.75rem' }}>
-            {cgpaModuleCount} modules / {cgpaTotalCredits} GPA cr
+            Total Course Credits: {result.totalCourseCredits}
+          </span>
+          <span className="stat-chip stat-chip--modules" style={{ fontSize: '0.8125rem', padding: '0.35rem 0.75rem' }}>
+            Total Modules: {result.totalModules}
           </span>
         </div>
       </div>
@@ -89,12 +96,14 @@ const StudentResults: FC<StudentResultsProps> = ({
           key={sem.semesterName + '-' + idx}
           result={sem}
           cgpa={cgpa}
-          cgpaModuleCount={cgpaModuleCount}
-          cgpaTotalCredits={cgpaTotalCredits}
+          cgpaModuleCount={result.cgpaModuleCount}
+          cgpaTotalCredits={result.cgpaTotalCredits}
           classification={classification}
           isLatest={idx === semesters.length - 1}
+          moduleExclusions={moduleExclusions}
           onSetManualCredit={onSetManualCredit}
           onToggleExclude={onToggleExclude}
+          onToggleModule={onToggleModule}
           studentIndexNumber={indexNumber}
         />
       ))}
@@ -114,8 +123,7 @@ const StudentResults: FC<StudentResultsProps> = ({
       >
         <p style={{ margin: 0 }}>
           <strong>Note on calculations:</strong> Cumulative GPA (CGPA) displayed above is calculated exclusively{' '}
-          <strong>from {cgpaModuleCount} module{cgpaModuleCount !== 1 ? 's' : ''} / {cgpaTotalCredits} GPA credits</strong>{' '}
-          loaded in this session. The official award of any degree or class depends on meeting all academic criteria,
+          from the selected GPA-eligible modules loaded in this session. The official award of any degree or class depends on meeting all academic criteria,
           including completion of all degree requirements and compulsory non-GPA components.
         </p>
       </div>
