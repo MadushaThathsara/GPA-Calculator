@@ -226,51 +226,103 @@ export function findRowColumns(row: PdfTextItem[]): {
 }
 
 /**
+ * Summary, chart, and footer text filter.
+ * Prevents summary tables, chart elements, and signatures from being parsed as student rows.
+ */
+export function isSummaryOrFooterRow(items: PdfTextItem[]): boolean {
+  if (items.length === 0) return true;
+  const rowStr = items.map((it) => it.str).join(' ').trim();
+
+  // 1. Total lines
+  if (/^(?:Total|Total\s+Students|Total\s+Candidates)\s*[:=]?/i.test(rowStr)) return true;
+  if (/\b(?:Total|Total\s+Students)\b/i.test(rowStr) && /\b\d+\b/.test(rowStr)) return true;
+  if (/\b100(?:\.0)?%/i.test(rowStr)) return true;
+
+  // 2. Grade distribution summary table rows (e.g. "A 9 5.9%", "A- 33 21.6%", "Others 11 7.2%")
+  if (/^(?:Others|[A-E][+-]?)\s+\d+\s+[0-9.]+%/i.test(rowStr)) return true;
+  if (/\b[0-9.]+%\b/.test(rowStr)) return true;
+
+  // 3. Isolated bar chart tick marks (pure numbers with no index pattern, e.g. "28", "24", "20", "16", "12", "8", "4", "0")
+  if (/^\d{1,3}$/.test(rowStr)) return true;
+
+  // 4. Bar chart grade axis category labels (e.g. "A A- B+ B B- C+ C Others")
+  if (/^(?:[A-E][+-]?\s+)+(?:Others|[A-E][+-]?)$/i.test(rowStr)) return true;
+
+  // 5. Signatures and page/course metadata
+  if (/^(?:Entered\s+by|Entered\s+Date|Marks|GRADES\s+SHEET|Date\s+of\s+Exam|Course\s+Code|Course\s+Name|Sheet\s+Number|Medium\s*:)/i.test(rowStr)) return true;
+  if (/^(?:Faculty\s+of|UNIVERSITY\s+OF|Department\s+of|EXAMINATION\s+UNIT|Common\s+Module)/i.test(rowStr)) return true;
+  if (/^\d{1,2}:\d{2}(?::\d{2})?\s*(?:AM|PM)\s+\d{2}-[A-Za-z]+-\d{4}$/i.test(rowStr)) return true; // timestamp footer
+
+  return false;
+}
+
+/**
  * Extracts TextLayerRow records from a set of position-grouped text rows
  * on a single page.
  *
  * Handles single-column and multi-column layouts (2 or more students side by side)
- * by splitting rows around index number tokens.
+ * by clustering student indices into coordinate columns, or splitting rows around
+ * index number tokens.
  *
  * @param rows  Output of groupItemsIntoRows() from pdfText.ts.
  */
 export function extractTextLayerRows(rows: PdfTextItem[][]): TextLayerRow[] {
-  const result: TextLayerRow[] = [];
+  if (rows.length === 0) return [];
 
-  for (const rawRow of rows) {
-    // Reconstruct any fragmented tokens in this row
-    const sorted = reconstructRowItems(rawRow);
+  // Filter out any row that is obviously a summary or footer row
+  const dataRows = rows.filter((r) => !isSummaryOrFooterRow(r));
+  const allItems = dataRows.flat();
 
-    // Detect all index items in the row
-    const indexIndices: number[] = [];
-    for (let i = 0; i < sorted.length; i++) {
-      const norm = normaliseIdx(sorted[i].str);
-      if (norm !== null && validateIndexNumber(norm)) {
-        indexIndices.push(i);
+  // Find all index candidates across all items to detect layout
+  const indexItems: Array<{ item: PdfTextItem; norm: string }> = [];
+  for (const it of allItems) {
+    const norm = normaliseIdx(it.str);
+    if (norm !== null && validateIndexNumber(norm)) {
+      indexItems.push({ item: it, norm });
+    }
+  }
+
+  // Also reconstruct fragmented index items if needed
+  if (indexItems.length === 0) {
+    for (const r of dataRows) {
+      const reconstructed = reconstructRowItems(r);
+      for (const it of reconstructed) {
+        const norm = normaliseIdx(it.str);
+        if (norm !== null && validateIndexNumber(norm)) {
+          indexItems.push({ item: it, norm });
+        }
       }
     }
+  }
 
-    if (indexIndices.length === 0) continue;
+  if (indexItems.length === 0) return [];
 
-    if (indexIndices.length === 1) {
-      // Single-column row
-      const cols = findRowColumns(sorted);
-      if (!cols) continue;
-      const norm = normaliseIdx(cols.indexItem.str);
-      result.push({
-        indexNumber: norm,
-        rawIndex: cols.indexItem.str,
-        textGradeOrStatus: cols.gradeItem?.str.trim() || null,
-        x: cols.indexItem.x,
-        y: cols.indexItem.y,
-      });
-    } else {
-      // Multi-column layout: split row around each index number
-      for (let i = 0; i < indexIndices.length; i++) {
-        const start = indexIndices[i];
-        const end = i + 1 < indexIndices.length ? indexIndices[i + 1] : sorted.length;
-        const segment = sorted.slice(start, end);
-        const cols = findRowColumns(segment);
+  // Detect column splits based on horizontal clustering of student index numbers
+  const xs = indexItems.map((d) => d.item.x).sort((a, b) => a - b);
+  const columnSplits: number[] = [];
+  for (let i = 0; i < xs.length - 1; i++) {
+    const gap = xs[i + 1] - xs[i];
+    if (gap > 60) {
+      columnSplits.push(xs[i] + gap / 2);
+    }
+  }
+
+  const result: TextLayerRow[] = [];
+
+  if (columnSplits.length > 0) {
+    // Multi-column layout: partition all items into column segments
+    const bounds = [-Infinity, ...columnSplits, Infinity];
+    for (let c = 0; c < bounds.length - 1; c++) {
+      const minX = bounds[c];
+      const maxX = bounds[c + 1];
+      const colItems = allItems.filter((it) => it.x >= minX && it.x < maxX);
+      if (colItems.length === 0) continue;
+
+      const colRows = groupItemsIntoRows(colItems, ROW_Y_TOLERANCE);
+      for (const rawColRow of colRows) {
+        if (isSummaryOrFooterRow(rawColRow)) continue;
+        const sorted = reconstructRowItems(rawColRow);
+        const cols = findRowColumns(sorted);
         if (!cols) continue;
         const norm = normaliseIdx(cols.indexItem.str);
         result.push({
@@ -280,6 +332,49 @@ export function extractTextLayerRows(rows: PdfTextItem[][]): TextLayerRow[] {
           x: cols.indexItem.x,
           y: cols.indexItem.y,
         });
+      }
+    }
+  } else {
+    // Single-column layout (or fallback)
+    for (const rawRow of dataRows) {
+      const sorted = reconstructRowItems(rawRow);
+      const indexIndices: number[] = [];
+      for (let i = 0; i < sorted.length; i++) {
+        const norm = normaliseIdx(sorted[i].str);
+        if (norm !== null && validateIndexNumber(norm)) {
+          indexIndices.push(i);
+        }
+      }
+
+      if (indexIndices.length === 0) continue;
+
+      if (indexIndices.length === 1) {
+        const cols = findRowColumns(sorted);
+        if (!cols) continue;
+        const norm = normaliseIdx(cols.indexItem.str);
+        result.push({
+          indexNumber: norm,
+          rawIndex: cols.indexItem.str,
+          textGradeOrStatus: cols.gradeItem?.str.trim() || null,
+          x: cols.indexItem.x,
+          y: cols.indexItem.y,
+        });
+      } else {
+        for (let i = 0; i < indexIndices.length; i++) {
+          const start = indexIndices[i];
+          const end = i + 1 < indexIndices.length ? indexIndices[i + 1] : sorted.length;
+          const segment = sorted.slice(start, end);
+          const cols = findRowColumns(segment);
+          if (!cols) continue;
+          const norm = normaliseIdx(cols.indexItem.str);
+          result.push({
+            indexNumber: norm,
+            rawIndex: cols.indexItem.str,
+            textGradeOrStatus: cols.gradeItem?.str.trim() || null,
+            x: cols.indexItem.x,
+            y: cols.indexItem.y,
+          });
+        }
       }
     }
   }
@@ -522,6 +617,42 @@ export function reconcileRow(input: ReconcileInput): ResultRow {
 // Page-level pipeline
 // ---------------------------------------------------------------------------
 
+/** Candidate diagnostic records for tracking accepted & rejected rows. */
+export interface CandidateDiagnostic {
+  source: 'text' | 'ocr';
+  indexCandidate: string;
+  gradeCandidate?: string;
+  accepted: boolean;
+  rejectionReason?: string;
+}
+
+/**
+ * Detects if an OCR-recognized candidate index number is merely a character mutation
+ * (e.g. 23 misread as 28 or 20, or a single character OCR typo in prefix/year) of an already seen student.
+ */
+export function isOcrMutationOfExisting(candidate: string, seen: Map<string, unknown>): boolean {
+  if (seen.has(candidate)) return true;
+  const candParts = candidate.split('/');
+  if (candParts.length !== 3) return false;
+  const [candPref, candYr, candSeq] = candParts;
+
+  for (const existing of seen.keys()) {
+    const exParts = existing.split('/');
+    if (exParts.length !== 3) continue;
+    const [exPref, exYr, exSeq] = exParts;
+
+    // Same sequence number (e.g. 801) but year digit misread (e.g. 28, 20, 25 vs 23)
+    if (candPref === exPref && candSeq === exSeq && candYr !== exYr) {
+      return true;
+    }
+    // Same sequence number and same year, but prefix slightly misread (e.g. 1CT vs ICT)
+    if (candYr === exYr && candSeq === exSeq && candPref !== exPref) {
+      return true;
+    }
+  }
+  return false;
+}
+
 /** Result of processing a single page through the full reconciliation pipeline. */
 export interface ReconcilePageResult {
   rows: ResultRow[];
@@ -529,6 +660,8 @@ export interface ReconcilePageResult {
   duplicateIndexNumbers: string[];
   /** Count of rows where the index number failed the pattern. */
   invalidIndexCount: number;
+  /** Candidate diagnostics for tracking accepted & rejected candidates on this page. */
+  candidateDiagnostics?: CandidateDiagnostic[];
 }
 
 /**
@@ -551,6 +684,7 @@ export function reconcilePage(
 
   const ocrMap = matchOcrToTextRows(effectiveTextRows, ocrWords, renderScale);
   const rows: ResultRow[] = [];
+  const rowByIndex = new Map<string, ResultRow>();
   const seenIndex = new Map<string, number>(); // normalised index → count
   let invalidIndexCount = 0;
 
@@ -575,33 +709,187 @@ export function reconcilePage(
       ocrCellText,
       noTextLayer: effectiveNoTextLayer,
     });
-    rows.push(row);
 
     // Validate index number
     if (!validateIndexNumber(row.indexNumber)) {
       invalidIndexCount++;
     }
 
-    // Track duplicates
+    // Track duplicates and detect conflicts
     const key = row.indexNumber;
-    seenIndex.set(key, (seenIndex.get(key) ?? 0) + 1);
+    if (seenIndex.has(key)) {
+      seenIndex.set(key, seenIndex.get(key)! + 1);
+      const existing = rowByIndex.get(key);
+      if (existing && existing.workingValue !== row.workingValue) {
+        if (!existing.flags.includes('check-this')) {
+          existing.flags.push('check-this');
+        }
+        if (!row.flags.includes('check-this')) {
+          row.flags.push('check-this');
+        }
+      }
+    } else {
+      seenIndex.set(key, 1);
+      rowByIndex.set(key, row);
+    }
+
+    rows.push(row);
   }
+
+  const candidateDiagnostics: CandidateDiagnostic[] = [];
 
   // If there was a text layer, check if OCR found additional student index rows
   if (!effectiveNoTextLayer && ocrWords.length > 0) {
+    // Collect established cohort prefixes from text layer on this page
+    const establishedPrefixes = new Set<string>();
+    for (const r of effectiveTextRows) {
+      if (r.indexNumber) {
+        const parts = r.indexNumber.split('/');
+        if (parts[0]) establishedPrefixes.add(parts[0]);
+      }
+    }
+
+    // Collect established index column X coordinates from text layer on this page
+    const establishedColXs = effectiveTextRows
+      .map((r) => r.x)
+      .filter((x): x is number => typeof x === 'number');
+
     const ocrOnlyCandidates = buildTextRowsFromOcr(ocrWords, renderScale);
     for (const cand of ocrOnlyCandidates) {
-      if (cand.indexNumber && !seenIndex.has(cand.indexNumber)) {
+      if (!cand.indexNumber || !validateIndexNumber(cand.indexNumber)) {
+        if (cand.indexNumber) {
+          candidateDiagnostics.push({
+            source: 'ocr',
+            indexCandidate: cand.indexNumber,
+            gradeCandidate: cand.textGradeOrStatus || undefined,
+            accepted: false,
+            rejectionReason: 'Does not match recognized university index pattern',
+          });
+        }
+        continue;
+      }
+
+      // 1. Spatial Table-Cell Occupancy Check (Requirements 2 & 3):
+      // In a printed tabular result sheet, each cell contains exactly one student record.
+      // If a text-layer student is already located at this (x, y) cell (within vertical row
+      // tolerance and horizontal column tolerance), any OCR candidate here with a different
+      // index number is an OCR optical misread of that existing student (e.g. 9 misread as 0).
+      const candY = cand.y;
+      const candX = cand.x;
+      const occupyingTextRow = effectiveTextRows.find((tr) => {
+        // Vertical row proximity (within 10 pt of text row)
+        const yDist = Math.abs(tr.y - candY);
+        if (yDist > 10) return false;
+
+        // Horizontal column proximity if both X coordinates are known
+        if (typeof tr.x === 'number' && typeof candX === 'number') {
+          return Math.abs(tr.x - candX) <= 60;
+        }
+        return true;
+      });
+
+      if (occupyingTextRow) {
+        // If the OCR candidate matches the existing row's index, it was already reconciled in primary pass.
+        // If it differs, OCR misread the text-layer student at this row (e.g. ICT/23/026 vs ICT/23/926).
+        const isSameStudent = occupyingTextRow.indexNumber === cand.indexNumber;
+        if (!isSameStudent) {
+          candidateDiagnostics.push({
+            source: 'ocr',
+            indexCandidate: cand.indexNumber,
+            gradeCandidate: cand.textGradeOrStatus || undefined,
+            accepted: false,
+            rejectionReason: `Table row position (x: ${candX !== undefined ? candX.toFixed(1) : '?'}, y: ${candY.toFixed(1)}) is already occupied by text-layer student ${occupyingTextRow.indexNumber} (OCR misread of existing row)`,
+          });
+        }
+        continue;
+      }
+
+      // 2. Expected Column Alignment Check (Requirement 3):
+      // When text-layer rows exist, any genuine missing student must align horizontally with an established index column.
+      if (typeof candX === 'number' && establishedColXs.length > 0) {
+        const alignsWithIndexColumn = establishedColXs.some((colX) => Math.abs(colX - candX) <= 45);
+        if (!alignsWithIndexColumn) {
+          candidateDiagnostics.push({
+            source: 'ocr',
+            indexCandidate: cand.indexNumber,
+            gradeCandidate: cand.textGradeOrStatus || undefined,
+            accepted: false,
+            rejectionReason: `Candidate X-coordinate (${candX.toFixed(1)}) does not align with any established student index column`,
+          });
+          continue;
+        }
+      }
+
+      // 3. Faculty/Cohort Prefix Check (Requirement 4):
+      const candPrefix = cand.indexNumber.split('/')[0];
+      if (establishedPrefixes.size > 0 && !establishedPrefixes.has(candPrefix)) {
+        candidateDiagnostics.push({
+          source: 'ocr',
+          indexCandidate: cand.indexNumber,
+          gradeCandidate: cand.textGradeOrStatus || undefined,
+          accepted: false,
+          rejectionReason: `Mismatched faculty prefix '${candPrefix}' (cohort prefix is '${[...establishedPrefixes].join(', ')}')`,
+        });
+        continue;
+      }
+
+      // 4. Duplicate / Mutation Check:
+      if (seenIndex.has(cand.indexNumber)) {
+        candidateDiagnostics.push({
+          source: 'ocr',
+          indexCandidate: cand.indexNumber,
+          gradeCandidate: cand.textGradeOrStatus || undefined,
+          accepted: false,
+          rejectionReason: `Duplicate student record (${cand.indexNumber} already extracted)`,
+        });
+        continue;
+      }
+
+      if (isOcrMutationOfExisting(cand.indexNumber, seenIndex)) {
+        candidateDiagnostics.push({
+          source: 'ocr',
+          indexCandidate: cand.indexNumber,
+          gradeCandidate: cand.textGradeOrStatus || undefined,
+          accepted: false,
+          rejectionReason: 'OCR character mutation/typo of existing student record',
+        });
+        continue;
+      }
+
+      // 5. Valid Grade/Status Check:
+      if (
+        cand.textGradeOrStatus !== null &&
+        cand.textGradeOrStatus.trim().length > 0
+      ) {
         const row = reconcileRow({
           textRow: cand,
           ocrCellText: cand.textGradeOrStatus,
           noTextLayer: true, // sole source is OCR
         });
+        // Per Requirement 5: If a candidate cannot be verified confidently, flag it for review
+        if (!row.flags.includes('check-this')) {
+          row.flags.push('check-this');
+        }
         rows.push(row);
         seenIndex.set(cand.indexNumber, 1);
+        rowByIndex.set(cand.indexNumber, row);
         if (!validateIndexNumber(row.indexNumber)) {
           invalidIndexCount++;
         }
+        candidateDiagnostics.push({
+          source: 'ocr',
+          indexCandidate: cand.indexNumber,
+          gradeCandidate: cand.textGradeOrStatus,
+          accepted: true,
+        });
+      } else {
+        candidateDiagnostics.push({
+          source: 'ocr',
+          indexCandidate: cand.indexNumber,
+          gradeCandidate: undefined,
+          accepted: false,
+          rejectionReason: 'No valid grade or examination status associated with OCR candidate',
+        });
       }
     }
   }
@@ -610,7 +898,7 @@ export function reconcilePage(
     .filter(([, count]) => count > 1)
     .map(([idx]) => idx);
 
-  return { rows, duplicateIndexNumbers, invalidIndexCount };
+  return { rows, duplicateIndexNumbers, invalidIndexCount, candidateDiagnostics };
 }
 
 // ---------------------------------------------------------------------------
@@ -698,10 +986,29 @@ export function buildTextRowsFromOcr(
   ocrWords: OcrWord[],
   renderScale: number = 2.0,
 ): TextLayerRow[] {
-  const ocrRows = groupOcrWordsIntoRows(ocrWords);
+  // Filter out OCR words that belong to summary tables or footers
+  const filteredWords = ocrWords.filter((w) => {
+    const t = w.text.trim();
+    if (!t) return false;
+    if (/^(?:Total:|Total|Others|100\.0%|100%|Entered|Marks)$/i.test(t)) return false;
+    if (/\b\d+(?:\.\d+)?%\b/.test(t)) return false;
+    return true;
+  });
+
+  const ocrRows = groupOcrWordsIntoRows(filteredWords);
   const result: TextLayerRow[] = [];
 
   for (const rawOcrRow of ocrRows) {
+    // Skip rows matching summary or chart patterns
+    const lineText = rawOcrRow.map((w) => w.text).join(' ');
+    if (
+      /\b(?:Total|Total\s+Students|Total\s+Candidates|100(?:\.0)?%|Entered\s+by|Entered\s+Date|Others|\d+%\b)\b/i.test(lineText) ||
+      /^(?:Others|[A-E][+-]?)\s+\d+\s+[0-9.]+%/i.test(lineText) ||
+      /^\d{1,3}$/.test(lineText.trim())
+    ) {
+      continue;
+    }
+
     const ocrRow = reconstructOcrWords(rawOcrRow);
     const sorted = [...ocrRow].sort((a, b) => a.bbox.x0 - b.bbox.x0);
 

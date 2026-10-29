@@ -50,4 +50,8 @@ export interface ExtractedSheet {
   estimatedRowCount: number | null;
   /** Actual extracted row count. */
   extractedRowCount: number;
+  /** Official printed student count from PDF summary/footer (e.g. Total: 153). */
+  printedTotal?: number | null;
+  /** Warning message if extracted row count does not match the printed total. */
+  countMismatchWarning?: string | null;
 }

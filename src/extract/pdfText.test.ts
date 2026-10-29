@@ -23,6 +23,7 @@ import {
   ensurePdfWorker,
   extractAcademicYear,
   parseSemesterHeading,
+  extractPrintedTotal,
   ROW_Y_TOLERANCE,
   type PdfTextItem,
 } from './pdfText';
@@ -525,5 +526,52 @@ describe('parseSheetHeader with Academic Year and Semester extraction', () => {
     expect(header.semesterNumber).toBeNull();
     expect(header.semesterWarning).toBeDefined();
     expect(header.semesterWarning).toContain('Examination semester heading could not be identified');
+  });
+
+  it('extracts printedTotal from the summary footer row', () => {
+    const rows = [
+      makeRow('UNIVERSITY OF SRI JAYEWARDENEPURA', 10),
+      makeRow('Second Semester Examination in 2025', 20),
+      makeRow('IIC 1123 Database Systems', 30),
+      makeRow('ICT/23/801 A', 100),
+      makeRow('Total: 153 100.0%', 200),
+    ];
+    const header = parseSheetHeader(rows);
+    expect(header.printedTotal).toBe(153);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. extractPrintedTotal
+// ---------------------------------------------------------------------------
+
+describe('extractPrintedTotal', () => {
+  it('extracts count from "Total: 153 100.0%"', () => {
+    expect(extractPrintedTotal('Total: 153 100.0%')).toBe(153);
+  });
+
+  it('extracts count from "Total: 100.0% 153"', () => {
+    expect(extractPrintedTotal('Total: 100.0% 153')).toBe(153);
+  });
+
+  it('extracts count from "Total: 153"', () => {
+    expect(extractPrintedTotal('Total: 153')).toBe(153);
+    expect(extractPrintedTotal('Total : 48')).toBe(48);
+  });
+
+  it('extracts count from "Total Students : 153"', () => {
+    expect(extractPrintedTotal('Total Students : 153')).toBe(153);
+    expect(extractPrintedTotal('Total Candidates: 85')).toBe(85);
+  });
+
+  it('extracts count from "Number of Students: 120"', () => {
+    expect(extractPrintedTotal('Number of Students: 120')).toBe(120);
+    expect(extractPrintedTotal('Number of Candidates: 95')).toBe(95);
+  });
+
+  it('returns null when no total pattern is found', () => {
+    expect(extractPrintedTotal('Grade Sheet Database Systems')).toBeNull();
+    expect(extractPrintedTotal('')).toBeNull();
+    expect(extractPrintedTotal('Score: 85%')).toBeNull();
   });
 });

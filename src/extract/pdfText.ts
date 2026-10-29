@@ -84,6 +84,8 @@ export interface SheetHeader {
   semesterWarning?: string | null;
   /** Warning if academic year could not be determined from module code */
   academicYearWarning?: string | null;
+  /** Official printed student count from PDF summary/footer (e.g. Total: 153). */
+  printedTotal?: number | null;
 }
 
 /** Full result of processing one PDF file. */
@@ -189,14 +191,49 @@ export const VALID_FACULTY_PREFIXES = new Set([
   'ICT', 'ITC', 'IT', 'IS', 'CS', 'SE', 'ET', 'BST', 'AT', 'FOT',
   'TG', 'TI', 'TEC', 'COT', 'AMC', 'AI', 'ML', 'DS', 'BIO', 'MLS',
   'ENG', 'AG', 'CM', 'ENT', 'FST', 'TECH', 'ITM', 'BIT', 'BCS',
-  'S', 'E', 'A', 'T', 'AS', 'PS', 'MS'
+  'AS', 'PS', 'MS'
 ]);
 
 /**
  * Pattern for index numbers (e.g. ICT/23/811, ITC/21/045, 2021/ITC/045, 2020/21/ITC/045).
  */
 export const INDEX_NUMBER_PATTERN =
-  /(?:\b[A-Z]{1,6}[\/\-_](?:\d{4}[\/\-_]\d{2}|\d{2}[\/\-_]\d{2}|\d{2}|\d{4})[\/\-_]\d{3,5}\b|\b(?:\d{4}[\/\-_]\d{2}|\d{2}[\/\-_]\d{2}|\d{2}|\d{4})[\/\-_][A-Z]{1,6}[\/\-_]\d{3,5}\b|\b[A-Z]{1,6}[\/\-_]?\d{2,4}[\/\-_]?\d{3,5}\b)/i;
+  /(?:\b[A-Z]{2,6}[\/\-_](?:\d{4}[\/\-_]\d{2}|\d{2}[\/\-_]\d{2}|\d{2}|\d{4})[\/\-_]\d{3,5}\b|\b(?:\d{4}[\/\-_]\d{2}|\d{2}[\/\-_]\d{2}|\d{2}|\d{4})[\/\-_][A-Z]{2,6}[\/\-_]\d{3,5}\b|\b[A-Z]{2,6}[\/\-_]?\d{2,4}[\/\-_]?\d{3,5}\b)/i;
+
+/**
+ * Patterns to extract the official printed student count / total from the PDF.
+ * University result sheets typically print totals like:
+ *   "Total: 153 100.0%"
+ *   "Total: 100.0% 153"
+ *   "Total: 153"
+ *   "Total Students: 153"
+ *   "Total Candidates: 153"
+ *   "Number of Students: 153"
+ *   "Number of Candidates: 153"
+ */
+export const PRINTED_TOTAL_PATTERNS = [
+  /\bTotal(?:\s+Students|\s+Candidates)?\s*[:=]?\s*(?:[0-9.]+\s*%\s*)?(\d+)\b/i,
+  /\bTotal(?:\s+Students|\s+Candidates)?\s*[:=]?\s*(\d+)(?:\s+[0-9.]+\s*%)?\b/i,
+  /\bNumber\s+of\s+(?:Students|Candidates)\s*[:=]?\s*(\d+)\b/i,
+];
+
+/**
+ * Extracts the official printed student total from raw text if present.
+ * @returns Parsed positive integer count, or null if not found.
+ */
+export function extractPrintedTotal(text: string): number | null {
+  if (!text) return null;
+  for (const pattern of PRINTED_TOTAL_PATTERNS) {
+    const match = pattern.exec(text);
+    if (match && match[1]) {
+      const val = parseInt(match[1], 10);
+      if (!isNaN(val) && val > 0 && val < 10000) {
+        return val;
+      }
+    }
+  }
+  return null;
+}
 
 /**
  * Loose regex for a course code of the form IIC2242, IC3433, IN3462, etc.
@@ -385,12 +422,17 @@ export function parseSheetHeader(rows: PdfTextItem[][]): SheetHeader {
   let examYear: string | null = null;
   let examSession: string | null = null;
   let date: string | null = null;
+  let printedTotal: number | null = null;
 
   for (const row of rows) {
     const text = rowToString(row);
 
-    // Stop once we hit student data rows
-    if (INDEX_NUMBER_PATTERN.test(text)) break;
+    if (printedTotal === null) {
+      printedTotal = extractPrintedTotal(text);
+    }
+
+    // Stop header field extraction once we hit student data rows
+    if (INDEX_NUMBER_PATTERN.test(text)) continue;
 
     if (examSession === null) {
       const heading = parseSemesterHeading(text);
@@ -439,6 +481,7 @@ export function parseSheetHeader(rows: PdfTextItem[][]): SheetHeader {
     examYear,
     examSession,
     date,
+    printedTotal,
     semesterWarning,
     academicYearWarning,
   };
@@ -455,10 +498,11 @@ export function parseHeaderFromText(text: string): SheetHeader {
   let examYear: string | null = null;
   let examSession: string | null = null;
   let date: string | null = null;
+  const printedTotal: number | null = extractPrintedTotal(text);
 
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
   for (const line of lines) {
-    if (INDEX_NUMBER_PATTERN.test(line)) break;
+    if (INDEX_NUMBER_PATTERN.test(line)) continue;
 
     if (examSession === null) {
       const heading = parseSemesterHeading(line);
@@ -503,6 +547,7 @@ export function parseHeaderFromText(text: string): SheetHeader {
     examYear,
     examSession,
     date,
+    printedTotal,
     semesterWarning,
     academicYearWarning,
   };
@@ -770,19 +815,32 @@ export async function extractPdfPages(
   // Parse header across document pages (search beyond page 1 if heading or course code is on a later page)
   let header = parseSheetHeader(pages[0]?.rows ?? []);
   for (let p = 1; p < pages.length; p++) {
-    if (!header.examSession || !header.courseCode) {
-      const pageHeader = parseSheetHeader(pages[p].rows);
-      header = {
-        courseCode: header.courseCode || pageHeader.courseCode,
-        courseName: header.courseName || pageHeader.courseName,
-        academicYear: header.academicYear ?? pageHeader.academicYear,
-        semesterNumber: header.semesterNumber ?? pageHeader.semesterNumber,
-        examYear: header.examYear ?? pageHeader.examYear,
-        examSession: header.examSession || pageHeader.examSession,
-        date: header.date || pageHeader.date,
-        semesterWarning: (header.examSession || pageHeader.examSession) ? null : header.semesterWarning,
-        academicYearWarning: (header.academicYear ?? pageHeader.academicYear) ? null : header.academicYearWarning,
-      };
+    const pageHeader = parseSheetHeader(pages[p].rows);
+    header = {
+      courseCode: header.courseCode || pageHeader.courseCode,
+      courseName: header.courseName || pageHeader.courseName,
+      academicYear: header.academicYear ?? pageHeader.academicYear,
+      semesterNumber: header.semesterNumber ?? pageHeader.semesterNumber,
+      examYear: header.examYear ?? pageHeader.examYear,
+      examSession: header.examSession || pageHeader.examSession,
+      date: header.date || pageHeader.date,
+      printedTotal: header.printedTotal ?? pageHeader.printedTotal,
+      semesterWarning: (header.examSession || pageHeader.examSession) ? null : header.semesterWarning,
+      academicYearWarning: (header.academicYear ?? pageHeader.academicYear) ? null : header.academicYearWarning,
+    };
+  }
+
+  // Also scan all text items across all pages for printed total if not yet found
+  if (!header.printedTotal) {
+    for (const page of pages) {
+      for (const row of page.rows) {
+        const total = extractPrintedTotal(rowToString(row));
+        if (total !== null) {
+          header.printedTotal = total;
+          break;
+        }
+      }
+      if (header.printedTotal) break;
     }
   }
 

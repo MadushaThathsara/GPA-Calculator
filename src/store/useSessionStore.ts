@@ -55,6 +55,8 @@ export interface MockSheet {
   rows: MockResultRow[];
   semesterWarning?: string | null;
   academicYearWarning?: string | null;
+  printedTotal?: number | null;
+  countMismatchWarning?: string | null;
 }
 
 export interface ResitDetail {

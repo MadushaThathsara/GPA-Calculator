@@ -152,6 +152,22 @@ const SheetsList: FC<SheetsListProps> = ({
                     Resit
                   </span>
                 )}
+                {sheet.countMismatchWarning && (
+                  <span
+                    style={{
+                      fontSize: '0.625rem',
+                      padding: '0.1rem 0.4rem',
+                      borderRadius: 'var(--r-full)',
+                      background: 'rgba(239,68,68,0.15)',
+                      color: 'var(--danger)',
+                      border: '1px solid rgba(239,68,68,0.3)',
+                      fontWeight: 700,
+                    }}
+                    title={sheet.countMismatchWarning}
+                  >
+                    ⚠️ Count Mismatch
+                  </span>
+                )}
                 {sheet.semesterWarning && !sheet.examSession && (
                   <span
                     style={{
@@ -249,7 +265,25 @@ const SheetsList: FC<SheetsListProps> = ({
                         ⚠️ No session found
                       </span>
                     )}{' '}
-                    · {sheet.rows.length} students
+                    ·{' '}
+                    {sheet.countMismatchWarning ? (
+                      <span
+                        style={{
+                          color: 'var(--danger)',
+                          fontWeight: 700,
+                          cursor: 'help',
+                        }}
+                        title={sheet.countMismatchWarning}
+                      >
+                        ⚠️ {sheet.rows.length} students (PDF prints {sheet.printedTotal})
+                      </span>
+                    ) : sheet.printedTotal !== null && sheet.printedTotal !== undefined ? (
+                      <span title={`Verified with printed PDF total of ${sheet.printedTotal} students`}>
+                        {sheet.rows.length} students ✓
+                      </span>
+                    ) : (
+                      <span>{sheet.rows.length} students</span>
+                    )}
                   </p>
                   <button
                     type="button"

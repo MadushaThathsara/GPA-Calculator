@@ -25,11 +25,14 @@ import {
   buildTextRowsFromOcr,
   matchOcrToTextRows,
   reconstructRowItems,
+  isSummaryOrFooterRow,
+  isOcrMutationOfExisting,
   type TextLayerRow,
   type ReconcileInput,
 } from './reconcile';
 import { groupItemsIntoRows, type PdfTextItem } from './pdfText';
 import type { OcrWord } from './ocr';
+import type { ResultRow } from './types';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -661,5 +664,374 @@ describe('matchOcrToTextRows', () => {
     expect(extractedDual).toHaveLength(1);
     expect(extractedDual[0].indexNumber).toBe('ITC/20/012');
     expect(extractedDual[0].textGradeOrStatus).toBe('B');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 10. Multi-Page Two-Column & 153-Student Grade Sheet Regression
+// ---------------------------------------------------------------------------
+
+describe('Two-Column Multi-Page 153-Student Grade Sheet Extraction (IIC 1123 Regression)', () => {
+  it('correctly pairs grades in a two-column layout when stream reading order is mixed', () => {
+    // In stream order: Col 2 index and grade appear before Col 1 index and grade, or interleaved
+    const mixedStreamItems: PdfTextItem[] = [
+      pdfItem('ICT/23/826', 324, 261), // Col 2 Index
+      pdfItem('ICT/23/801', 54.6, 261), // Col 1 Index
+      pdfItem('B+', 452, 261), // Col 2 Grade
+      pdfItem('B', 185.3, 261), // Col 1 Grade
+    ];
+    const rows = groupItemsIntoRows(mixedStreamItems);
+    const extracted = extractTextLayerRows(rows);
+
+    expect(extracted).toHaveLength(2);
+    const r1 = extracted.find((r) => r.indexNumber === 'ICT/23/801');
+    const r2 = extracted.find((r) => r.indexNumber === 'ICT/23/826');
+
+    expect(r1).toBeDefined();
+    expect(r1?.textGradeOrStatus).toBe('B');
+
+    expect(r2).toBeDefined();
+    expect(r2?.textGradeOrStatus).toBe('B+');
+  });
+
+  it('extracts exactly 153 unique student records from a 4-page representative two-column grade sheet', () => {
+    // Builds a representative 4-page grade sheet modeled on IIC 1123 Database Systems
+    const pagesItems: PdfTextItem[][] = [];
+
+    // Pages 1 to 3: 50 students per page (25 rows x 2 columns)
+    let seq = 801;
+    for (let p = 1; p <= 3; p++) {
+      const pageItems: PdfTextItem[] = [
+        pdfItem('UNIVERSITY OF SRI JAYEWARDENEPURA', 117, 68),
+        pdfItem('Second Semester Examination in 2025', 212, 148),
+        pdfItem('IIC 1123 Database Systems', 127, 190),
+        pdfItem('Index No', 71.2, 240),
+        pdfItem('Grade', 176.6, 240),
+        pdfItem('Index No', 340.8, 240),
+        pdfItem('Grade', 446.8, 240),
+      ];
+
+      for (let r = 0; r < 25; r++) {
+        const y = 261 + r * 19.9;
+        const col1Index = `ICT/23/${seq++}`;
+        const col2Index = `ICT/23/${seq++}`;
+        // Mixed stream order for each row
+        pageItems.push(
+          pdfItem(col2Index, 324.0, y),
+          pdfItem(col1Index, 54.6, y),
+          pdfItem('B+', 452.0, y),
+          pdfItem('A-', 183.8, y),
+        );
+      }
+      pagesItems.push(pageItems);
+    }
+
+    // Page 4: 3 students in Column 1, 0 students in Column 2,
+    // plus grade distribution summary table, chart labels, and footer
+    const page4Items: PdfTextItem[] = [
+      pdfItem('UNIVERSITY OF SRI JAYEWARDENEPURA', 117, 68),
+      pdfItem('Second Semester Examination in 2025', 212, 148),
+      pdfItem('IIC 1123 Database Systems', 127, 190),
+      pdfItem('Index No', 71.2, 240),
+      pdfItem('Grade', 176.6, 240),
+      pdfItem('Index No', 340.8, 240),
+      pdfItem('Grade', 446.8, 240),
+      // 3 real student rows in Col 1 (ICT/23/951, ICT/23/952, ICT/23/953)
+      pdfItem('ICT/23/951', 54.6, 261.0),
+      pdfItem('B+', 182.6, 261.0),
+      pdfItem('ICT/23/952', 54.6, 280.9),
+      pdfItem('B', 185.3, 280.9),
+      pdfItem('ICT/23/953', 54.6, 300.8),
+      pdfItem('A-', 183.8, 300.8),
+      // Summary table rows below student rows
+      pdfItem('A', 70.4, 419.6),
+      pdfItem('9', 114.3, 419.6),
+      pdfItem('5.9%', 134.5, 419.6),
+      pdfItem('A-', 70.4, 429.9),
+      pdfItem('33', 109.4, 429.9),
+      pdfItem('21.6%', 129.6, 429.9),
+      pdfItem('B+', 70.4, 440.3),
+      pdfItem('42', 109.4, 440.3),
+      pdfItem('27.5%', 129.6, 440.3),
+      pdfItem('B', 70.4, 450.6),
+      pdfItem('32', 109.4, 450.6),
+      pdfItem('20.9%', 129.6, 450.6),
+      pdfItem('Total:', 70.4, 504.3),
+      pdfItem('153', 104.5, 504.3),
+      pdfItem('100.0%', 124.7, 504.3),
+      // Chart labels and tick counts (28, 24, 20, 16, 12, 8, 4, 0)
+      pdfItem('28', 170.2, 364.8),
+      pdfItem('24', 170.2, 396.0),
+      pdfItem('20', 170.2, 429.9),
+      pdfItem('16', 170.2, 461.0),
+      pdfItem('Others', 70.4, 492.2),
+      pdfItem('A', 202.0, 591.2),
+      pdfItem('A-', 244.8, 591.2),
+      pdfItem('B+', 288.1, 591.2),
+      pdfItem('B', 334.7, 591.2),
+      pdfItem('Others', 502.2, 591.2),
+      // Footers
+      pdfItem('Entered by', 47.9, 618.4),
+      pdfItem(': Ms. M.H Paul', 96.2, 618.4),
+      pdfItem('Entered Date : 4/7/2025 11:12:11 AM', 47.9, 630.0),
+    ];
+    pagesItems.push(page4Items);
+
+    const allReconciled: ResultRow[] = [];
+    const seenIndices = new Map<string, ResultRow>();
+
+    for (let p = 0; p < pagesItems.length; p++) {
+      const rows = groupItemsIntoRows(pagesItems[p]);
+      const textRows = extractTextLayerRows(rows);
+
+      // Reconcile page (no OCR words needed since text layer is complete)
+      const reconciled = reconcilePage(textRows, [], false);
+
+      for (const r of reconciled.rows) {
+        if (!r.indexNumber) continue;
+        const norm = r.indexNumber.toUpperCase().replace(/\s+/g, '');
+        if (!seenIndices.has(norm)) {
+          seenIndices.set(norm, r);
+          allReconciled.push(r);
+        }
+      }
+    }
+
+    // Must extract exactly 153 students (50 + 50 + 50 + 3)
+    expect(allReconciled).toHaveLength(153);
+    expect(seenIndices.size).toBe(153);
+
+    // Assert first and last students
+    expect(allReconciled[0].indexNumber).toBe('ICT/23/801');
+    expect(allReconciled[0].grade).toBe('A-');
+
+    const last = allReconciled[allReconciled.length - 1];
+    expect(last.indexNumber).toBe('ICT/23/953');
+    expect(last.grade).toBe('A-');
+
+    // Chart labels (28, 24, Others, etc.) must NEVER appear as students
+    const anyPhantom = allReconciled.some(
+      (r) => r.indexNumber === '28' || r.indexNumber.includes('Others') || r.indexNumber.startsWith('A/') || r.indexNumber.startsWith('E/'),
+    );
+    expect(anyPhantom).toBe(false);
+  });
+
+  it('flags student rows with "check-this" when grade is missing or unverified', () => {
+    const rowWithoutGrade: PdfTextItem[] = [
+      pdfItem('ICT/23/855', 54.6, 261.0),
+      // no grade item to the right
+    ];
+    const rows = groupItemsIntoRows(rowWithoutGrade);
+    const textRows = extractTextLayerRows(rows);
+    expect(textRows).toHaveLength(1);
+    expect(textRows[0].textGradeOrStatus).toBeNull();
+
+    const reconciled = reconcilePage(textRows, [], false);
+    expect(reconciled.rows).toHaveLength(1);
+    expect(reconciled.rows[0].flags).toContain('check-this');
+    expect(reconciled.rows[0].workingValue).toBe('');
+    expect(reconciled.rows[0].grade).toBeNull();
+  });
+
+  it('detects duplicate student records with conflicting grades and flags them', () => {
+    const row1: PdfTextItem[] = [
+      pdfItem('ICT/23/801', 54.6, 261.0),
+      pdfItem('A', 185.0, 261.0),
+    ];
+    const row2: PdfTextItem[] = [
+      pdfItem('ICT/23/801', 54.6, 280.0),
+      pdfItem('C', 185.0, 280.0),
+    ];
+    const rows = groupItemsIntoRows([...row1, ...row2]);
+    const textRows = extractTextLayerRows(rows);
+    expect(textRows).toHaveLength(2);
+
+    const reconciled = reconcilePage(textRows, [], false);
+    expect(reconciled.duplicateIndexNumbers).toContain('ICT/23/801');
+    // Both conflicting rows must be marked check-this
+    expect(reconciled.rows[0].flags).toContain('check-this');
+    expect(reconciled.rows[1].flags).toContain('check-this');
+  });
+
+  // ---------------------------------------------------------------------------
+  // 9. isSummaryOrFooterRow & non-student row filtering
+  // ---------------------------------------------------------------------------
+  describe('isSummaryOrFooterRow', () => {
+    it('identifies official total lines', () => {
+      expect(isSummaryOrFooterRow([pdfItem('Total:', 70, 500), pdfItem('153', 104, 500), pdfItem('100.0%', 124, 500)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('Total Students: 153', 70, 500)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('100.0%', 124, 500)])).toBe(true);
+    });
+
+    it('identifies grade distribution summary rows', () => {
+      expect(isSummaryOrFooterRow([pdfItem('A', 70, 420), pdfItem('9', 109, 420), pdfItem('5.9%', 129, 420)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('A-', 70, 430), pdfItem('33', 109, 430), pdfItem('21.6%', 129, 430)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('Others', 70, 492), pdfItem('11', 109, 492), pdfItem('7.2%', 129, 492)])).toBe(true);
+    });
+
+    it('identifies isolated bar chart tick marks and axis categories', () => {
+      expect(isSummaryOrFooterRow([pdfItem('28', 170, 364)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('24', 170, 396)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('0', 170, 480)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('A A- B+ B B- C+ C Others', 200, 590)])).toBe(true);
+    });
+
+    it('identifies administrative metadata and footers', () => {
+      expect(isSummaryOrFooterRow([pdfItem('Entered by : Ms. M.H Paul', 47, 618)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('Entered Date : 4/7/2025 11:12:11 AM', 47, 630)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('UNIVERSITY OF SRI JAYEWARDENEPURA', 100, 50)])).toBe(true);
+      expect(isSummaryOrFooterRow([pdfItem('GRADES SHEET', 100, 70)])).toBe(true);
+    });
+
+    it('does NOT filter valid student index rows', () => {
+      expect(isSummaryOrFooterRow([pdfItem('ICT/23/801', 54, 100), pdfItem('A', 185, 100)])).toBe(false);
+      expect(isSummaryOrFooterRow([pdfItem('ICT/23/953', 54, 100), pdfItem('B+', 185, 100)])).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 10. isOcrMutationOfExisting
+  // ---------------------------------------------------------------------------
+  describe('isOcrMutationOfExisting', () => {
+    it('detects year digit misread mutations (e.g. 28, 20, 25 vs 23)', () => {
+      const seen = new Map<string, number>([['ICT/23/801', 1]]);
+      expect(isOcrMutationOfExisting('ICT/28/801', seen)).toBe(true);
+      expect(isOcrMutationOfExisting('ICT/20/801', seen)).toBe(true);
+      expect(isOcrMutationOfExisting('ICT/25/801', seen)).toBe(true);
+    });
+
+    it('detects prefix typo mutations of existing students with same sequence number', () => {
+      const seen = new Map<string, number>([['ICT/23/811', 1]]);
+      // prefix typo e.g. 1CT vs ICT
+      expect(isOcrMutationOfExisting('1CT/23/811', seen)).toBe(true);
+    });
+
+    it('does not reject genuinely distinct students', () => {
+      const seen = new Map<string, number>([['ICT/23/801', 1]]);
+      expect(isOcrMutationOfExisting('ICT/23/802', seen)).toBe(false);
+      expect(isOcrMutationOfExisting('ICT/23/850', seen)).toBe(false);
+      expect(isOcrMutationOfExisting('ICT/23/912', seen)).toBe(false);
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // 11. ReconcilePage OCR Candidate Filtering & Diagnostics
+  // ---------------------------------------------------------------------------
+  describe('reconcilePage OCR candidate filtering', () => {
+    it('rejects OCR candidates matching wrong faculty prefixes when cohort is ICT', () => {
+      const textRows: TextLayerRow[] = [
+        textRow('ICT/23/801', 'A', 100),
+        textRow('ICT/23/802', 'B', 114),
+      ];
+      // OCR candidate with AS prefix (e.g. from summary table token)
+      const ocrWords: OcrWord[] = [
+        ocrWord('AS/20/153', 50, 400, 200, 414),
+        ocrWord('A', 210, 400, 250, 414),
+      ];
+
+      const res = reconcilePage(textRows, ocrWords, false, 2.0);
+      expect(res.rows).toHaveLength(2);
+      expect(res.rows.some((r) => r.indexNumber.startsWith('AS/'))).toBe(false);
+
+      expect(res.candidateDiagnostics).toBeDefined();
+      const rejected = res.candidateDiagnostics?.find((c) => c.indexCandidate === 'AS/20/153');
+      expect(rejected).toBeDefined();
+      expect(rejected?.accepted).toBe(false);
+      expect(rejected?.rejectionReason).toContain("Mismatched faculty prefix 'AS'");
+    });
+
+    it('rejects OCR candidate that is an OCR mutation of an already extracted student', () => {
+      const textRows: TextLayerRow[] = [
+        textRow('ICT/23/801', 'A', 100),
+      ];
+      // OCR misread 23 as 28
+      const ocrWords: OcrWord[] = [
+        ocrWord('ICT/28/801', 50, 300, 200, 314),
+        ocrWord('A', 210, 300, 250, 314),
+      ];
+
+      const res = reconcilePage(textRows, ocrWords, false, 2.0);
+      expect(res.rows).toHaveLength(1);
+      expect(res.rows[0].indexNumber).toBe('ICT/23/801');
+
+      const mutatedDiag = res.candidateDiagnostics?.find((c) => c.indexCandidate === 'ICT/28/801');
+      expect(mutatedDiag).toBeDefined();
+      expect(mutatedDiag?.accepted).toBe(false);
+      expect(mutatedDiag?.rejectionReason).toContain('OCR character mutation/typo');
+    });
+
+    it('rejects false-positive OCR candidates that are optical misreads of existing text-layer rows (Page 3 regression)', () => {
+      // Simulate Page 3: 50 text-layer students (ICT/23/901 to ICT/23/950) in two columns
+      // 25 rows, row pitch 13.8 pt, starting at y = 261.0
+      // Col 1 at x = 54.6, Col 2 at x = 312.4
+      const textRows: TextLayerRow[] = [];
+      for (let r = 0; r < 25; r++) {
+        const y = 261.0 + r * 13.8;
+        // Col 1: 901 to 925
+        textRows.push({
+          indexNumber: `ICT/23/${901 + r}`,
+          rawIndex: `ICT/23/${901 + r}`,
+          textGradeOrStatus: 'B',
+          x: 54.6,
+          y,
+        });
+        // Col 2: 926 to 950
+        textRows.push({
+          indexNumber: `ICT/23/${926 + r}`,
+          rawIndex: `ICT/23/${926 + r}`,
+          textGradeOrStatus: 'A',
+          x: 312.4,
+          y,
+        });
+      }
+      expect(textRows).toHaveLength(50);
+
+      // OCR produced optical misreads (e.g. 9 misread as 0) at the same physical row positions:
+      // ICT/23/026 at row 0, col 2 (y=261.0, x=312.4, where 926 is)
+      // ICT/23/028 at row 2, col 2 (y=288.6, x=312.4, where 928 is)
+      // ICT/23/029 at row 3, col 2 (y=302.4, x=312.4, where 929 is)
+      // ICT/23/032 at row 6, col 2 (y=343.8, x=312.4, where 932 is)
+      // ICT/23/011 at row 10, col 1 (y=399.0, x=54.6, where 911 is)
+      // ICT/23/013 at row 12, col 1 (y=426.6, x=54.6, where 913 is)
+      // ICT/23/017 at row 16, col 1 (y=481.8, x=54.6, where 917 is)
+      // ICT/23/024 at row 23, col 1 (y=578.4, x=54.6, where 924 is)
+      const falsePositives = [
+        { index: 'ICT/23/026', grade: 'A', x: 312.4, y: 261.0, origIdx: 'ICT/23/926' },
+        { index: 'ICT/23/028', grade: 'B', x: 312.4, y: 261.0 + 2 * 13.8, origIdx: 'ICT/23/928' },
+        { index: 'ICT/23/029', grade: 'B-', x: 312.4, y: 261.0 + 3 * 13.8, origIdx: 'ICT/23/929' },
+        { index: 'ICT/23/032', grade: 'B', x: 312.4, y: 261.0 + 6 * 13.8, origIdx: 'ICT/23/932' },
+        { index: 'ICT/23/011', grade: 'B', x: 54.6, y: 261.0 + 10 * 13.8, origIdx: 'ICT/23/911' },
+        { index: 'ICT/23/013', grade: 'A', x: 54.6, y: 261.0 + 12 * 13.8, origIdx: 'ICT/23/913' },
+        { index: 'ICT/23/017', grade: 'E(CA) & AB(ESA)', x: 54.6, y: 261.0 + 16 * 13.8, origIdx: 'ICT/23/917' },
+        { index: 'ICT/23/024', grade: 'B', x: 54.6, y: 261.0 + 23 * 13.8, origIdx: 'ICT/23/924' },
+      ];
+
+      // Convert false positives to OCR words at scale 2.0
+      const ocrWords: OcrWord[] = [];
+      for (const fp of falsePositives) {
+        ocrWords.push(ocrWord(fp.index, fp.x * 2.0, fp.y * 2.0, (fp.x + 60) * 2.0, (fp.y + 12) * 2.0));
+        ocrWords.push(ocrWord(fp.grade, (fp.x + 70) * 2.0, fp.y * 2.0, (fp.x + 100) * 2.0, (fp.y + 12) * 2.0));
+      }
+
+      const res = reconcilePage(textRows, ocrWords, false, 2.0);
+
+      // Must remain EXACTLY 50 students — none of the 8 false positives are added!
+      expect(res.rows).toHaveLength(50);
+
+      // Student index numbers must be the true text-layer numbers 901 to 950
+      const indices = res.rows.map((r) => r.indexNumber);
+      expect(indices).toContain('ICT/23/926');
+      expect(indices).toContain('ICT/23/917');
+      expect(indices).not.toContain('ICT/23/026');
+      expect(indices).not.toContain('ICT/23/017');
+
+      // Candidate diagnostics must document the exact rejection of each false positive
+      for (const fp of falsePositives) {
+        const diag = res.candidateDiagnostics?.find((c) => c.indexCandidate === fp.index);
+        expect(diag).toBeDefined();
+        expect(diag?.accepted).toBe(false);
+        expect(diag?.rejectionReason).toContain(`already occupied by text-layer student ${fp.origIdx}`);
+      }
+    });
   });
 });
