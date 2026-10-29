@@ -30,11 +30,11 @@ const uocConfig: UniversityConfig = {
     'E':  0.0,
   },
 
-  // Spec §4 status table — PROVISIONAL
+  // Status rules — E(ESA) and E(CA) are excluded from GPA calculations (0 GPA contribution)
   statusRules: {
     'E':                 { inGpa: true  },  // counted as 0.0
-    'E(ESA)':            { inGpa: true  },  // counted as 0.0
-    'E(CA)':             { inGpa: true  },  // counted as 0.0
+    'E(ESA)':            { inGpa: false },  // component failure, excluded from GPA
+    'E(CA)':             { inGpa: false },  // component failure, excluded from GPA
     'AB':                { inGpa: false },  // absent, excluded
     'AB(ESA)':           { inGpa: false },  // absent, excluded
     'AB(CA)':            { inGpa: false },  // absent, excluded

@@ -475,3 +475,221 @@ describe('Green/Red Module Selection & Recalculation Rules', () => {
     expect(redRes?.totalCourseCredits).toBe(3);
   });
 });
+
+describe('E(CA) and E(ESA) GPA Exclusion Rules', () => {
+  it('excludes E(CA) results from SGPA and CGPA numerator and denominator, even when module dot is green', () => {
+    const sheetEca: typeof SAMPLE_SHEET_1 = {
+      ...SAMPLE_SHEET_1,
+      id: 'sheet-eca',
+      courseCode: 'ITC1052', // 2 credits
+      courseName: 'Mathematics',
+      examSession: 'First Semester Examination 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'ITC1052',
+          grade: null,
+          status: 'E(CA)',
+          flags: [],
+          textReading: 'E(CA)',
+          ocrReading: 'E(CA)',
+          workingValue: 'E(CA)',
+        },
+      ],
+    };
+
+    const sheetGradeA: typeof SAMPLE_SHEET_2 = {
+      ...SAMPLE_SHEET_2,
+      id: 'sheet-grade-a',
+      courseCode: 'IIC2173', // 3 credits
+      courseName: 'Data Structures',
+      examSession: 'First Semester Examination 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'IIC2173',
+          grade: 'A', // 4.0, 3 credits -> 12.0
+          status: null,
+          flags: [],
+          textReading: 'A',
+          ocrReading: 'A',
+          workingValue: 'A',
+        },
+      ],
+    };
+
+    // Both modules are green (default, no exclusions)
+    const student = calculateStudentSearch([sheetEca, sheetGradeA], '811', uocConfig, {}, {}, {});
+    expect(student).not.toBeNull();
+
+    // 1. Total Course Credits and Total Modules include BOTH modules
+    expect(student?.totalModules).toBe(2);
+    expect(student?.totalCourseCredits).toBe(5); // 2 credits (ITC1052) + 3 credits (IIC2173)
+
+    const sem = student?.semesters[0];
+    expect(sem?.totalModules).toBe(2);
+    expect(sem?.totalCourseCredits).toBe(5);
+
+    // 2. E(CA) does NOT contribute to GPA numerator or denominator
+    // GPA credits must only be 3 (from IIC2173), NOT 5
+    expect(sem?.totalCredits).toBe(3);
+    expect(sem?.moduleCount).toBe(1);
+    // SGPA = 4.0 * 3 / 3 = 4.0000 (if E(CA) had added 2 credits to denominator, SGPA would be 12/5 = 2.4)
+    expect(sem?.sgpa).toBeCloseTo(4.0, 4);
+    expect(formatSgpa(sem?.sgpa!)).toBe('4.0000');
+    expect(student?.cgpa).toBeCloseTo(4.0, 2);
+
+    // 3. Original extracted status is preserved
+    const ecaRow = sem?.rows.find((r) => r.row.moduleCode === 'ITC1052');
+    expect(ecaRow).toBeDefined();
+    expect(ecaRow?.row.status).toBe('E(CA)');
+    expect(ecaRow?.row.grade).toBeNull();
+    expect(ecaRow?.effectiveGrade).toBeNull();
+    expect(ecaRow?.excluded).toBe(true);
+    expect(ecaRow?.gpaPoints).toBeNull();
+    expect(ecaRow?.credits).toBe(2);
+  });
+
+  it('excludes E(ESA) results from SGPA and CGPA numerator and denominator, even when module dot is green', () => {
+    const sheetEesa: typeof SAMPLE_SHEET_1 = {
+      ...SAMPLE_SHEET_1,
+      id: 'sheet-eesa',
+      courseCode: 'ITC1052', // 2 credits
+      courseName: 'Mathematics',
+      examSession: 'First Semester Examination 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'ITC1052',
+          grade: null,
+          status: 'E(ESA)',
+          flags: [],
+          textReading: 'E(ESA)',
+          ocrReading: 'E(ESA)',
+          workingValue: 'E(ESA)',
+        },
+      ],
+    };
+
+    const sheetGradeB: typeof SAMPLE_SHEET_2 = {
+      ...SAMPLE_SHEET_2,
+      id: 'sheet-grade-b',
+      courseCode: 'IIC2173', // 3 credits
+      courseName: 'Data Structures',
+      examSession: 'First Semester Examination 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'IIC2173',
+          grade: 'B', // 3.0, 3 credits -> 9.0
+          status: null,
+          flags: [],
+          textReading: 'B',
+          ocrReading: 'B',
+          workingValue: 'B',
+        },
+      ],
+    };
+
+    // Both modules green
+    const student = calculateStudentSearch([sheetEesa, sheetGradeB], '811', uocConfig, {}, {}, {});
+    expect(student).not.toBeNull();
+
+    // Total Course Credits = 5, Total Modules = 2
+    expect(student?.totalModules).toBe(2);
+    expect(student?.totalCourseCredits).toBe(5);
+
+    const sem = student?.semesters[0];
+    expect(sem?.totalModules).toBe(2);
+    expect(sem?.totalCourseCredits).toBe(5);
+
+    // E(ESA) does NOT contribute to GPA numerator or denominator
+    expect(sem?.totalCredits).toBe(3);
+    expect(sem?.moduleCount).toBe(1);
+    // SGPA = 3.0 * 3 / 3 = 3.0000 (NOT 9/5 = 1.8)
+    expect(sem?.sgpa).toBeCloseTo(3.0, 4);
+    expect(formatSgpa(sem?.sgpa!)).toBe('3.0000');
+    expect(student?.cgpa).toBeCloseTo(3.0, 2);
+
+    // Original status preserved
+    const eesaRow = sem?.rows.find((r) => r.row.moduleCode === 'ITC1052');
+    expect(eesaRow).toBeDefined();
+    expect(eesaRow?.row.status).toBe('E(ESA)');
+    expect(eesaRow?.excluded).toBe(true);
+    expect(eesaRow?.gpaPoints).toBeNull();
+  });
+
+  it('keeps total course credits and total modules invariant when toggling green/red on E(CA) module', () => {
+    const sheetEca: typeof SAMPLE_SHEET_1 = {
+      ...SAMPLE_SHEET_1,
+      id: 'sheet-eca',
+      courseCode: 'ITC1052', // 2 credits
+      courseName: 'Mathematics',
+      examSession: 'First Semester Examination 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'ITC1052',
+          grade: null,
+          status: 'E(CA)',
+          flags: [],
+          textReading: 'E(CA)',
+          ocrReading: 'E(CA)',
+          workingValue: 'E(CA)',
+        },
+      ],
+    };
+
+    const sheetGradeA: typeof SAMPLE_SHEET_2 = {
+      ...SAMPLE_SHEET_2,
+      id: 'sheet-grade-a',
+      courseCode: 'IIC2173', // 3 credits
+      courseName: 'Data Structures',
+      examSession: 'First Semester Examination 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'IIC2173',
+          grade: 'A',
+          status: null,
+          flags: [],
+          textReading: 'A',
+          ocrReading: 'A',
+          workingValue: 'A',
+        },
+      ],
+    };
+
+    // Green state
+    const greenStudent = calculateStudentSearch([sheetEca, sheetGradeA], '811', uocConfig, {}, {}, { ITC1052: false });
+    expect(greenStudent?.totalModules).toBe(2);
+    expect(greenStudent?.totalCourseCredits).toBe(5);
+    expect(greenStudent?.cgpa).toBeCloseTo(4.0, 2);
+
+    // Red state (toggled to red)
+    const redStudent = calculateStudentSearch([sheetEca, sheetGradeA], '811', uocConfig, {}, {}, { ITC1052: true });
+    // Total Course Credits & Total Modules remain unchanged
+    expect(redStudent?.totalModules).toBe(2);
+    expect(redStudent?.totalCourseCredits).toBe(5);
+    // CGPA remains 4.0 (still excluded from GPA)
+    expect(redStudent?.cgpa).toBeCloseTo(4.0, 2);
+  });
+
+  it('verifies student 910 with E(CA) in sample sheets is excluded from GPA while keeping total credits and modules', () => {
+    // SAMPLE_SHEET_1 student 910 has IC3433 with E(CA) (3 credits)
+    // SAMPLE_SHEET_2 student 910 has IC3442 with B (2 credits, Grade B = 3.0)
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+    const student = calculateStudentSearch(sheets, '910', uocConfig);
+    expect(student).not.toBeNull();
+
+    // Total Course Credits = 3 (IC3433) + 2 (IC3442) = 5
+    // Total Modules = 2
+    expect(student?.totalModules).toBe(2);
+    expect(student?.totalCourseCredits).toBe(5);
+
+    // E(CA) is excluded: only IC3442 (Grade B, 2 credits) counts in GPA
+    expect(student?.cgpaModuleCount).toBe(1);
+    expect(student?.cgpaTotalCredits).toBe(2);
+    expect(student?.cgpa).toBeCloseTo(3.0, 2);
+  });
+});

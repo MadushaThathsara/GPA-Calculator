@@ -135,7 +135,7 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
 
   // ── Eligible original with repeat E-statuses ─────────────────────────────────
   describe('Eligible original with repeat failure statuses', () => {
-    it('Original D + repeat status E(ESA) -> replaces original, counts as E (0.0)', () => {
+    it('Original D + repeat status E(ESA) -> repeat E(ESA) is excluded from GPA', () => {
       const res = effectiveResult({
         originalGrade: 'D',
         originalStatus: null,
@@ -143,13 +143,12 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
         repeatStatus: 'E(ESA)',
         config: uocConfig,
       });
-      expect(res.gpaGrade).toBe('E');
+      expect(res.gpaGrade).toBeNull();
       expect(res.capped).toBe(false);
-      expect(res.excluded).toBe(false);
-      expect(uocConfig.gradeScale[res.gpaGrade!]).toBe(0.0);
+      expect(res.excluded).toBe(true);
     });
 
-    it('Original C- + repeat status E(CA) -> replaces original, counts as E (0.0)', () => {
+    it('Original C- + repeat status E(CA) -> repeat E(CA) is excluded from GPA', () => {
       const res = effectiveResult({
         originalGrade: 'C-',
         originalStatus: null,
@@ -157,9 +156,9 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
         repeatStatus: 'E(CA)',
         config: uocConfig,
       });
-      expect(res.gpaGrade).toBe('E');
+      expect(res.gpaGrade).toBeNull();
       expect(res.capped).toBe(false);
-      expect(res.excluded).toBe(false);
+      expect(res.excluded).toBe(true);
     });
 
     it('Original status E(ESA) + repeat A -> capped at B (3.0)', () => {
@@ -422,7 +421,7 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
       expect(res.excluded).toBe(true);
     });
 
-    it('Original status E(CA) without repeat counts as E (0.0)', () => {
+    it('Original status E(CA) without repeat is excluded from GPA', () => {
       const res = effectiveResult({
         originalGrade: null,
         originalStatus: 'E(CA)',
@@ -430,8 +429,20 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
         repeatStatus: null,
         config: uocConfig,
       });
-      expect(res.gpaGrade).toBe('E');
-      expect(res.excluded).toBe(false);
+      expect(res.gpaGrade).toBeNull();
+      expect(res.excluded).toBe(true);
+    });
+
+    it('Original status E(ESA) without repeat is excluded from GPA', () => {
+      const res = effectiveResult({
+        originalGrade: null,
+        originalStatus: 'E(ESA)',
+        repeatGrade: null,
+        repeatStatus: null,
+        config: uocConfig,
+      });
+      expect(res.gpaGrade).toBeNull();
+      expect(res.excluded).toBe(true);
     });
   });
 
@@ -444,10 +455,13 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
       expect(isGradableResit('E', null)).toBe(true);
     });
 
-    it('returns true for failure in-GPA statuses', () => {
+    it('returns true for failure in-GPA status E', () => {
       expect(isGradableResit(null, 'E')).toBe(true);
-      expect(isGradableResit(null, 'E(ESA)')).toBe(true);
-      expect(isGradableResit(null, 'E(CA)')).toBe(true);
+    });
+
+    it('returns false for failure statuses E(ESA) and E(CA) which are excluded from GPA', () => {
+      expect(isGradableResit(null, 'E(ESA)')).toBe(false);
+      expect(isGradableResit(null, 'E(CA)')).toBe(false);
     });
 
     it('returns false for ungradable / absent statuses', () => {

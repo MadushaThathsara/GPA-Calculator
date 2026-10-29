@@ -68,13 +68,14 @@ const NEUTRAL_REPEAT_STATUSES = new Set(['N', 'W']);
  * Ungradable results (AB, N, W) must not overwrite earlier gradable resits (spec Assumption A3).
  */
 export function isGradableResit(grade: string | null, status: string | null): boolean {
-  if (grade !== null) return true;
+  if (grade !== null && grade !== 'E(CA)' && grade !== 'E(ESA)') return true;
   if (status !== null) {
     if (AB_REPEAT_STATUSES.has(status) || NEUTRAL_REPEAT_STATUSES.has(status)) {
       return false;
     }
-    // E-type failure statuses are gradable (count as 0.0)
-    return status === 'E' || status === 'E(ESA)' || status === 'E(CA)';
+    // Only 'E' is an in-GPA failure status (counts as 0.0)
+    // E(CA) and E(ESA) are excluded from GPA calculations
+    return status === 'E';
   }
   return false;
 }
@@ -84,8 +85,18 @@ export function isGradableResit(grade: string | null, status: string | null): bo
  * Pure function — no side effects, no I/O.
  */
 export function effectiveResult(input: EffectiveResultInput): EffectiveResult {
-  const { originalGrade, originalStatus, repeatGrade, repeatStatus, config } = input;
+  let { originalGrade, originalStatus, repeatGrade, repeatStatus, config } = input;
   const { repeatCap, statusRules } = config;
+
+  // Normalize E(CA) and E(ESA) to status if passed as letter grade
+  if (originalGrade === ('E(CA)' as any) || originalGrade === ('E(ESA)' as any)) {
+    originalStatus = originalGrade;
+    originalGrade = null;
+  }
+  if (repeatGrade === ('E(CA)' as any) || repeatGrade === ('E(ESA)' as any)) {
+    repeatStatus = repeatGrade;
+    repeatGrade = null;
+  }
 
   // ── If no repeat exists, use the original ──────────────────────────────────
   if (repeatGrade === null && repeatStatus === null) {
@@ -187,6 +198,9 @@ function resolveOriginalOnly(
   status: string | null,
   statusRules: UniversityConfig['statusRules'],
 ): EffectiveResult {
+  if (status !== null && (status === 'E(CA)' || status === 'E(ESA)')) {
+    return { gpaGrade: null, capped: false, excluded: true, note: `${status} excluded from GPA` };
+  }
   if (grade !== null) {
     return { gpaGrade: grade, capped: false, excluded: false, note: '' };
   }
@@ -204,6 +218,9 @@ function resolveRepeatStatus(
   repeatStatus: string | null,
   statusRules: UniversityConfig['statusRules'],
 ): EffectiveResult {
+  if (repeatStatus !== null && (repeatStatus === 'E(CA)' || repeatStatus === 'E(ESA)')) {
+    return { gpaGrade: null, capped: false, excluded: true, note: `Repeat ${repeatStatus} excluded from GPA` };
+  }
   if (repeatStatus !== null) {
     const rule = statusRules[repeatStatus as keyof typeof statusRules];
     if (rule?.inGpa) {
