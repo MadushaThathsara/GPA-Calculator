@@ -25,6 +25,8 @@ import SheetsList from './ui/SheetsList';
 import SearchBar from './ui/SearchBar';
 import StudentResults from './ui/StudentResults';
 import DuplicateCourseModal from './ui/DuplicateCourseModal';
+import ConfirmClearModal from './ui/ConfirmClearModal';
+import { parsePdfFile } from './extract/parsePdf';
 import { useSessionStore } from './store/useSessionStore';
 import type { MockSheet } from './store/useSessionStore';
 import uocConfig from './rules/universities/uoc';
@@ -38,6 +40,9 @@ const App: FC = () => {
   const {
     sheets,
     moduleExclusions,
+    userEdits,
+    setGradeEdit,
+    clearGradeEdit,
     toggleModule,
     addSheet,
     replaceSheet,
@@ -56,8 +61,9 @@ const App: FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [notFound, setNotFound] = useState(false);
   const [pendingDuplicate, setPendingDuplicate] = useState<PendingDuplicate | null>(null);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
 
-  // Re-run search whenever sheets, exclusions, or query changes
+  // Re-run search whenever sheets, exclusions, userEdits, or query changes
   useEffect(() => {
     if (!searchQuery) {
       setSearchResult(null);
@@ -67,7 +73,7 @@ const App: FC = () => {
     const res = searchStudent(searchQuery);
     setSearchResult(res);
     setNotFound(res === null && sheets.length > 0);
-  }, [sheets, searchQuery, searchStudent]);
+  }, [sheets, searchQuery, searchStudent, moduleExclusions, userEdits]);
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
@@ -81,15 +87,11 @@ const App: FC = () => {
     setNotFound(result === null && sheets.length > 0);
   };
 
-  /** Check for duplicate before adding (spec §3 flow 2, M4) */
+  /** Check for duplicate before adding (spec §3 flow 2, M4, M8) */
   const handleSheetParsed = (sheet: MockSheet) => {
     const existing = checkDuplicate(sheet.courseCode, sheet.type ?? 'original');
 
     if (existing) {
-      // If user clicked the same sample button again, don't duplicate
-      if (existing.fileName === sheet.fileName && existing.rows.length === sheet.rows.length) {
-        return;
-      }
       setPendingDuplicate({ existing, incoming: sheet });
     } else {
       addSheet(sheet);
@@ -114,6 +116,26 @@ const App: FC = () => {
     setPendingDuplicate(null);
   };
 
+  /** Replace an uploaded PDF with an updated version */
+  const handleReplaceSheet = async (sheetId: string, file: File) => {
+    try {
+      const { sheet } = await parsePdfFile(file);
+      replaceSheet(sheetId, sheet);
+    } catch (err: unknown) {
+      alert(`Failed to replace sheet: ${(err as Error)?.message || String(err)}`);
+    }
+  };
+
+  /** Clear all session data after user confirmation */
+  const handleConfirmClearAll = () => {
+    clearSession();
+    setSearchResult(null);
+    setSearchQuery('');
+    setNotFound(false);
+    setPendingDuplicate(null);
+    setShowClearConfirm(false);
+  };
+
   const handleSetManualCredit = (moduleCode: string, credits: number) => {
     setManualCredit(moduleCode, credits);
   };
@@ -132,7 +154,7 @@ const App: FC = () => {
       <main className="app-main" id="main-content">
         <div className="container">
 
-          {/* ── Duplicate Course Modal (M4) ── */}
+          {/* ── Duplicate Course Modal (M4, M8) ── */}
           {pendingDuplicate && (
             <DuplicateCourseModal
               existingSheet={pendingDuplicate.existing}
@@ -140,6 +162,14 @@ const App: FC = () => {
               onReplace={handleResolveReplace}
               onKeepRepeatResit={handleResolveKeepRepeatResit}
               onCancel={handleCancelDuplicate}
+            />
+          )}
+
+          {/* ── Confirm Clear All Modal (M8) ── */}
+          {showClearConfirm && (
+            <ConfirmClearModal
+              onConfirm={handleConfirmClearAll}
+              onCancel={() => setShowClearConfirm(false)}
             />
           )}
 
@@ -177,7 +207,7 @@ const App: FC = () => {
                     <button
                       type="button"
                       className="btn btn--ghost btn--sm"
-                      onClick={clearSession}
+                      onClick={() => setShowClearConfirm(true)}
                       style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem', color: 'var(--danger)' }}
                       title="Clear all uploaded sheets in this browser session"
                     >
@@ -193,7 +223,8 @@ const App: FC = () => {
                   moduleExclusions={moduleExclusions}
                   onToggleModule={toggleModule}
                   onRemove={removeSheet}
-                  onClearAll={clearSession}
+                  onReplaceSheet={handleReplaceSheet}
+                  onClearAll={() => setShowClearConfirm(true)}
                   onUpdateSession={updateExamSession}
                   onUpdateAcademicYear={updateAcademicYear}
                 />
@@ -301,6 +332,8 @@ const App: FC = () => {
                     onSetManualCredit={handleSetManualCredit}
                     onToggleExclude={handleToggleExclude}
                     onToggleModule={toggleModule}
+                    onSetGradeEdit={setGradeEdit}
+                    onClearGradeEdit={clearGradeEdit}
                   />
                 )}
 

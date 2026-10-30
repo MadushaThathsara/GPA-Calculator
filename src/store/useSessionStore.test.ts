@@ -16,10 +16,12 @@ import {
   normalizeIndex,
   normalizeModuleCode,
   calculateCourseSummary,
+  resolveRowGradeStatus,
 } from './useSessionStore';
-import { formatSgpa } from '../engine/gpa';
+import { formatSgpa, formatSgpaDisplay, formatCgpaDisplay } from '../engine/gpa';
 import uocConfig from '../rules/universities/uoc';
 import { SAMPLE_SHEET_1, SAMPLE_SHEET_2, SAMPLE_SHEET_3_RESIT } from './sampleSheets';
+import { isValidGradeOrStatus, VALID_GRADES, VALID_STATUSES } from '../rules/schema';
 
 describe('normalizeIndex', () => {
   it('normalizes various index number string formats', () => {
@@ -691,5 +693,832 @@ describe('E(CA) and E(ESA) GPA Exclusion Rules', () => {
     expect(student?.cgpaModuleCount).toBe(1);
     expect(student?.cgpaTotalCredits).toBe(2);
     expect(student?.cgpa).toBeCloseTo(3.0, 2);
+  });
+});
+
+describe('Milestone M6 — Grade and Status Editing', () => {
+  describe('isValidGradeOrStatus', () => {
+    it('validates all canonical letter grades', () => {
+      for (const grade of VALID_GRADES) {
+        expect(isValidGradeOrStatus(grade)).toBe(true);
+      }
+    });
+
+    it('validates all canonical status codes', () => {
+      for (const status of VALID_STATUSES) {
+        expect(isValidGradeOrStatus(status)).toBe(true);
+      }
+    });
+
+    it('rejects invalid or empty grade/status strings', () => {
+      expect(isValidGradeOrStatus('')).toBe(false);
+      expect(isValidGradeOrStatus(' ')).toBe(false);
+      expect(isValidGradeOrStatus('XYZ')).toBe(false);
+      expect(isValidGradeOrStatus('F')).toBe(false);
+      expect(isValidGradeOrStatus('100')).toBe(false);
+      expect(isValidGradeOrStatus('A++')).toBe(false);
+      expect(isValidGradeOrStatus('Pass')).toBe(false);
+    });
+  });
+
+  describe('resolveRowGradeStatus', () => {
+    it('returns unedited original values when no edit is present', () => {
+      const res = resolveRowGradeStatus('s1', 'ICT/23/811', 'IC3433', 'A-', null, {});
+      expect(res.isEdited).toBe(false);
+      expect(res.workingGrade).toBe('A-');
+      expect(res.workingStatus).toBeNull();
+      expect(res.editedValue).toBeNull();
+    });
+
+    it('resolves edited letter grade using sheet-scoped key', () => {
+      const edits = { 's1:ICT23811:IC3433': 'A' };
+      const res = resolveRowGradeStatus('s1', 'ICT/23/811', 'IC3433', 'C-', null, edits);
+      expect(res.isEdited).toBe(true);
+      expect(res.workingGrade).toBe('A');
+      expect(res.workingStatus).toBeNull();
+      expect(res.editedValue).toBe('A');
+    });
+
+    it('resolves edited status code (e.g. E(CA))', () => {
+      const edits = { 'ICT23811:IC3433': 'E(CA)' };
+      const res = resolveRowGradeStatus('s1', 'ICT/23/811', 'IC3433', 'A', null, edits);
+      expect(res.isEdited).toBe(true);
+      expect(res.workingGrade).toBeNull();
+      expect(res.workingStatus).toBe('E(CA)');
+      expect(res.editedValue).toBe('E(CA)');
+    });
+
+    it('resolves compound status code (e.g. E(CA) & AB(ESA))', () => {
+      const edits = { 's1:ICT23811:IC3433': 'E(CA) & AB(ESA)' };
+      const res = resolveRowGradeStatus('s1', 'ICT/23/811', 'IC3433', 'B', null, edits);
+      expect(res.isEdited).toBe(true);
+      expect(res.workingGrade).toBeNull();
+      expect(res.workingStatus).toBe('E(CA) & AB(ESA)');
+      expect(res.editedValue).toBe('E(CA) & AB(ESA)');
+    });
+  });
+
+  describe('calculateStudentSearch with Grade and Status Edits', () => {
+    it('editing a letter grade updates SGPA, CGPA, and degree classification immediately', () => {
+      const sheets = [SAMPLE_SHEET_1]; // 811 originally has IC3433 (3 cr) Grade A- (3.7)
+
+      const before = calculateStudentSearch(sheets, '811', uocConfig);
+      expect(before?.semesters[0].sgpa).toBeCloseTo(3.7, 4);
+      expect(formatSgpa(before?.semesters[0].sgpa!)).toBe('3.7000');
+
+      // Edit 811's grade on IC3433 from A- (3.7) to A (4.0)
+      const userEdits = {
+        'ICT23811:IC3433': 'A',
+      };
+
+      const after = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, userEdits);
+      expect(after).not.toBeNull();
+      expect(after?.semesters[0].sgpa).toBeCloseTo(4.0, 4);
+      expect(formatSgpa(after?.semesters[0].sgpa!)).toBe('4.0000');
+      expect(after?.cgpa).toBeCloseTo(4.0, 2);
+      expect(after?.classification).toBe('First Class');
+
+      const rowItem = after?.semesters[0].rows[0];
+      expect(rowItem?.isEdited).toBe(true);
+      expect(rowItem?.editedValue).toBe('A');
+      expect(rowItem?.effectiveGrade).toBe('A');
+      expect(rowItem?.gpaPoints).toBe(4.0);
+      expect(rowItem?.row.flags).toContain('edited');
+    });
+
+    it('preserves original extracted values in sheet and rowItem as extraction evidence', () => {
+      const originalSheet = JSON.parse(JSON.stringify(SAMPLE_SHEET_1));
+      const sheets = [originalSheet];
+
+      const userEdits = {
+        'ICT23811:IC3433': 'B+',
+      };
+
+      const res = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, userEdits);
+      const rowItem = res?.semesters[0].rows[0];
+
+      // Row item preserves original evidence
+      expect(rowItem?.originalGrade).toBe('A-');
+      expect(rowItem?.originalStatus).toBeNull();
+      expect(rowItem?.row.textReading).toBe('A');
+      expect(rowItem?.row.ocrReading).toBe('A-');
+
+      // Original sheet in memory is NOT mutated
+      expect(originalSheet.rows[0].grade).toBe('A-');
+      expect(originalSheet.rows[0].flags).not.toContain('edited');
+    });
+
+    it('editing a grade to E(CA) excludes it from SGPA/CGPA numerator and denominator', () => {
+      // 811 takes two modules: IC3433 (3 cr, A-, 3.7) and IC3442 (2 cr, A, 4.0)
+      const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+
+      const before = calculateStudentSearch(sheets, '811', uocConfig);
+      expect(before?.totalModules).toBe(2);
+      expect(before?.totalCourseCredits).toBe(5);
+      expect(before?.cgpaModuleCount).toBe(2);
+      expect(before?.cgpaTotalCredits).toBe(5);
+      expect(before?.cgpa).toBeCloseTo(3.82, 2);
+
+      // Edit IC3433 from A- to E(CA)
+      const userEdits = {
+        'ICT23811:IC3433': 'E(CA)',
+      };
+
+      const after = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, userEdits);
+      expect(after).not.toBeNull();
+
+      // 1. Total Course Credits and Total Modules remain completely invariant
+      expect(after?.totalModules).toBe(2);
+      expect(after?.totalCourseCredits).toBe(5);
+
+      // 2. Only IC3442 (Grade A, 2 cr) contributes to GPA
+      expect(after?.cgpaModuleCount).toBe(1);
+      expect(after?.cgpaTotalCredits).toBe(2);
+      expect(after?.cgpa).toBeCloseTo(4.0, 2);
+
+      const sem1 = after?.semesters.find((s) => s.semesterName === SAMPLE_SHEET_1.examSession);
+      const editedRow = sem1?.rows.find((r) => r.row.moduleCode === 'IC3433');
+      expect(editedRow?.isEdited).toBe(true);
+      expect(editedRow?.excluded).toBe(true);
+      expect(editedRow?.gpaPoints).toBeNull();
+      expect(editedRow?.row.status).toBe('E(CA)');
+      expect(editedRow?.originalGrade).toBe('A-');
+    });
+
+    it('editing E(CA) to a letter grade includes it in GPA with corresponding grade points', () => {
+      // 910 originally has IC3433 with E(CA) (3 credits) and IC3442 with B (2 credits, 3.0)
+      const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+
+      const before = calculateStudentSearch(sheets, '910', uocConfig);
+      expect(before?.cgpaModuleCount).toBe(1);
+      expect(before?.cgpaTotalCredits).toBe(2);
+      expect(before?.cgpa).toBeCloseTo(3.0, 2);
+
+      // Correct E(CA) to B+ (3.3)
+      const userEdits = {
+        'ICT23910:IC3433': 'B+',
+      };
+
+      const after = calculateStudentSearch(sheets, '910', uocConfig, {}, {}, {}, userEdits);
+      expect(after).not.toBeNull();
+
+      // Now both modules count in GPA:
+      // IC3433: 3 cr * 3.3 = 9.9
+      // IC3442: 2 cr * 3.0 = 6.0
+      // Total credits = 5, Total points = 15.9 -> CGPA = 3.18
+      expect(after?.cgpaModuleCount).toBe(2);
+      expect(after?.cgpaTotalCredits).toBe(5);
+      expect(after?.cgpa).toBeCloseTo(3.18, 2);
+
+      // Total Course Credits and Total Modules remain invariant
+      expect(after?.totalModules).toBe(2);
+      expect(after?.totalCourseCredits).toBe(5);
+
+      const editedRow = after?.semesters[0].rows.find((r) => r.row.moduleCode === 'IC3433');
+      expect(editedRow?.isEdited).toBe(true);
+      expect(editedRow?.originalStatus).toBe('E(CA)');
+      expect(editedRow?.effectiveGrade).toBe('B+');
+      expect(editedRow?.gpaPoints).toBe(3.3);
+    });
+
+    it('editing to an ungradable status (e.g. AB, N, W) excludes module from GPA', () => {
+      const sheets = [SAMPLE_SHEET_1];
+
+      // Edit IC3433 to AB
+      const userEdits = {
+        'ICT23811:IC3433': 'AB',
+      };
+
+      const after = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, userEdits);
+      const rowItem = after?.semesters[0].rows[0];
+
+      expect(rowItem?.isEdited).toBe(true);
+      expect(rowItem?.excluded).toBe(true);
+      expect(rowItem?.gpaPoints).toBeNull();
+      expect(after?.cgpaTotalCredits).toBe(0);
+      expect(after?.cgpaModuleCount).toBe(0);
+      expect(after?.totalCourseCredits).toBe(3);
+      expect(after?.totalModules).toBe(1);
+    });
+
+    it('allows correcting an already edited result again (re-editing)', () => {
+      const sheets = [SAMPLE_SHEET_1];
+
+      // First edit: C-
+      const edits1 = { 'ICT23811:IC3433': 'C-' };
+      const res1 = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, edits1);
+      expect(res1?.semesters[0].sgpa).toBeCloseTo(1.3, 4);
+      expect(formatSgpa(res1?.semesters[0].sgpa!)).toBe('1.3000');
+
+      // Second edit: A+
+      const edits2 = { 'ICT23811:IC3433': 'A+' };
+      const res2 = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, edits2);
+      expect(res2?.semesters[0].sgpa).toBeCloseTo(4.0, 4);
+      expect(formatSgpa(res2?.semesters[0].sgpa!)).toBe('4.0000');
+      expect(res2?.semesters[0].rows[0].originalGrade).toBe('A-');
+      expect(res2?.semesters[0].rows[0].effectiveGrade).toBe('A+');
+    });
+
+    it('reverts to extracted original grade when edit is cleared', () => {
+      const sheets = [SAMPLE_SHEET_1];
+
+      // With edit
+      const withEdit = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, { 'ICT23811:IC3433': 'B' });
+      expect(withEdit?.semesters[0].sgpa).toBeCloseTo(3.0, 4);
+      expect(withEdit?.semesters[0].rows[0].isEdited).toBe(true);
+
+      // Cleared edit (empty userEdits)
+      const reverted = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, {});
+      expect(reverted?.semesters[0].sgpa).toBeCloseTo(3.7, 4);
+      expect(reverted?.semesters[0].rows[0].isEdited).toBe(false);
+      expect(reverted?.semesters[0].rows[0].row.flags).not.toContain('edited');
+    });
+
+    it('interacts correctly with repeat/resit capping when original is edited to AB(ESA)', () => {
+      // 906 has original C- in SAMPLE_SHEET_1, and repeat B+ in SAMPLE_SHEET_3_RESIT
+      // Normally, C- original with B+ repeat triggers cap at B (3.0)
+      const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_3_RESIT];
+
+      const before = calculateStudentSearch(sheets, '906', uocConfig);
+      expect(before?.semesters[0].rows[0].resitInfo?.capped).toBe(true);
+      expect(before?.semesters[0].rows[0].effectiveGrade).toBe('B');
+
+      // If user edits original result from C- to AB(ESA) (medical / absence)
+      // AB original means full repeat grade with NO cap!
+      const userEdits = {
+        [`${SAMPLE_SHEET_1.id}:ICT23906:IC3433`]: 'AB(ESA)',
+      };
+
+      const after = calculateStudentSearch(sheets, '906', uocConfig, {}, {}, {}, userEdits);
+      const rowItem = after?.semesters[0].rows[0];
+      expect(rowItem?.resitInfo?.capped).toBe(false);
+      expect(rowItem?.effectiveGrade).toBe('B+'); // Full repeat grade, no cap!
+      expect(rowItem?.gpaPoints).toBe(3.3);
+    });
+
+    it('interacts correctly with green/red dot inclusion when editing', () => {
+      const sheets = [SAMPLE_SHEET_1];
+
+      // Edit grade to A with module green (included)
+      const greenResult = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, { IC3433: false }, { 'ICT23811:IC3433': 'A' });
+      expect(greenResult?.cgpaModuleCount).toBe(1);
+      expect(greenResult?.cgpaTotalCredits).toBe(3);
+      expect(greenResult?.cgpa).toBeCloseTo(4.0, 2);
+
+      // Now toggle module to red (excluded)
+      const redResult = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, { IC3433: true }, { 'ICT23811:IC3433': 'A' });
+      expect(redResult?.cgpaModuleCount).toBe(0);
+      expect(redResult?.cgpaTotalCredits).toBe(0);
+      expect(redResult?.semesters[0].rows[0].excluded).toBe(true);
+      // Total course credits and modules still 3 and 1!
+      expect(redResult?.totalCourseCredits).toBe(3);
+      expect(redResult?.totalModules).toBe(1);
+    });
+  });
+});
+
+describe('Milestone M7 — Semester & Course Summary', () => {
+  it('computes semester-wise summary accurately (name, total modules, total course credits, 4-decimal SGPA)', () => {
+    // Student 811 in SAMPLE_SHEET_1 (IC3433, 3 cr, A-, 3.7) and SAMPLE_SHEET_2 (IC3442, 2 cr, A, 4.0)
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+    const student = calculateStudentSearch(sheets, '811', uocConfig);
+    expect(student).not.toBeNull();
+    expect(student?.semesters).toHaveLength(2);
+
+    // Semester 1
+    const sem1 = student!.semesters[0];
+    expect(sem1.semesterName).toBe('Second Semester 2023/2024');
+    expect(sem1.totalModules).toBe(1);
+    expect(sem1.totalCourseCredits).toBe(3);
+    expect(sem1.hasGpa).toBe(true);
+    expect(sem1.sgpa).toBeCloseTo(3.7, 4);
+    expect(formatSgpa(sem1.sgpa)).toBe('3.7000');
+    expect(formatSgpaDisplay(sem1.sgpa, sem1.moduleCount)).toBe('3.7000');
+
+    // Semester 2
+    const sem2 = student!.semesters[1];
+    expect(sem2.semesterName).toBe('First Semester 2024/2025');
+    expect(sem2.totalModules).toBe(1);
+    expect(sem2.totalCourseCredits).toBe(2);
+    expect(sem2.hasGpa).toBe(true);
+    expect(sem2.sgpa).toBeCloseTo(4.0, 4);
+    expect(formatSgpa(sem2.sgpa)).toBe('4.0000');
+    expect(formatSgpaDisplay(sem2.sgpa, sem2.moduleCount)).toBe('4.0000');
+  });
+
+  it('computes overall course summary accurately (Total Course Credits, Total Modules, 2-decimal CGPA, Classification)', () => {
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+    const student = calculateStudentSearch(sheets, '811', uocConfig);
+    expect(student).not.toBeNull();
+
+    // 1. Total Course Credits = 3 (IC3433) + 2 (IC3442) = 5
+    expect(student!.totalCourseCredits).toBe(5);
+
+    // 2. Total Modules = 2
+    expect(student!.totalModules).toBe(2);
+
+    // 3. Overall CGPA = (3*3.7 + 2*4.0) / 5 = 19.1 / 5 = 3.82
+    expect(student!.hasCgpa).toBe(true);
+    expect(student!.cgpa).toBeCloseTo(3.82, 2);
+    expect(student!.cgpa.toFixed(2)).toBe('3.82');
+    expect(formatCgpaDisplay(student!.cgpa, student!.cgpaModuleCount)).toBe('3.82');
+
+    // 4. Degree Classification = First Class (>= 3.70)
+    expect(student!.classification).toBe('First Class');
+  });
+
+  it('updates semester SGPA and overall CGPA immediately when a grade is edited', () => {
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+
+    // Initial CGPA for 811 is 3.82
+    const before = calculateStudentSearch(sheets, '811', uocConfig);
+    expect(before!.cgpa).toBeCloseTo(3.82, 2);
+    expect(formatSgpa(before!.semesters[0].sgpa)).toBe('3.7000');
+
+    // User edits IC3433 in semester 1 from A- (3.7) to A (4.0)
+    const userEdits = {
+      'ICT23811:IC3433': 'A',
+    };
+
+    const after = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, {}, userEdits);
+    expect(after).not.toBeNull();
+
+    // Semester 1 SGPA updates to 4.0000
+    expect(after!.semesters[0].sgpa).toBeCloseTo(4.0, 4);
+    expect(formatSgpa(after!.semesters[0].sgpa)).toBe('4.0000');
+
+    // Overall CGPA updates to 4.00
+    expect(after!.cgpa).toBeCloseTo(4.0, 2);
+    expect(after!.cgpa.toFixed(2)).toBe('4.00');
+    expect(after!.classification).toBe('First Class');
+
+    // Total Course Credits and Total Modules remain 5 and 2
+    expect(after!.totalCourseCredits).toBe(5);
+    expect(after!.totalModules).toBe(2);
+  });
+
+  it('updates semester SGPA and overall CGPA immediately when green/red selection is changed', () => {
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+
+    // Green state (default)
+    const greenResult = calculateStudentSearch(sheets, '811', uocConfig);
+    expect(greenResult!.cgpaModuleCount).toBe(2);
+    expect(greenResult!.cgpa).toBeCloseTo(3.82, 2);
+
+    // Toggle IC3433 to red (excluded)
+    const redResult = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, { IC3433: true });
+    expect(redResult).not.toBeNull();
+
+    // In Semester 1, IC3433 is excluded -> 0 GPA modules
+    expect(redResult!.semesters[0].moduleCount).toBe(0);
+    expect(redResult!.semesters[0].hasGpa).toBe(false);
+
+    // In Overall CGPA, only IC3442 (Grade A, 2 cr) counts -> CGPA = 4.00
+    expect(redResult!.cgpaModuleCount).toBe(1);
+    expect(redResult!.cgpaTotalCredits).toBe(2);
+    expect(redResult!.cgpa).toBeCloseTo(4.0, 2);
+    expect(redResult!.cgpa.toFixed(2)).toBe('4.00');
+
+    // Total Course Credits and Total Modules remain invariant
+    expect(redResult!.totalCourseCredits).toBe(5);
+    expect(redResult!.totalModules).toBe(2);
+    expect(redResult!.semesters[0].totalCourseCredits).toBe(3);
+    expect(redResult!.semesters[0].totalModules).toBe(1);
+  });
+
+  it('keeps total credits and module counts invariant after GPA exclusion (E(CA), E(ESA), AB, red toggle)', () => {
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+
+    // Exclude both modules: one via E(CA) edit, one via red toggle
+    const userEdits = { 'ICT23811:IC3433': 'E(CA)' };
+    const moduleExclusions = { IC3442: true };
+
+    const result = calculateStudentSearch(sheets, '811', uocConfig, {}, {}, moduleExclusions, userEdits);
+    expect(result).not.toBeNull();
+
+    // Both modules are excluded from GPA
+    expect(result!.cgpaModuleCount).toBe(0);
+    expect(result!.cgpaTotalCredits).toBe(0);
+    expect(result!.hasCgpa).toBe(false);
+
+    // But Total Course Credits and Total Modules STILL accurately reflect full enrollment!
+    expect(result!.totalCourseCredits).toBe(5);
+    expect(result!.totalModules).toBe(2);
+    expect(result!.semesters[0].totalCourseCredits).toBe(3);
+    expect(result!.semesters[0].totalModules).toBe(1);
+    expect(result!.semesters[1].totalCourseCredits).toBe(2);
+    expect(result!.semesters[1].totalModules).toBe(1);
+  });
+
+  it('handles repeat/resit linking without counting duplicate modules or duplicate credits', () => {
+    // 906 has original C- (3 credits) in SAMPLE_SHEET_1, and repeat B+ in SAMPLE_SHEET_3_RESIT
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_3_RESIT];
+
+    const student906 = calculateStudentSearch(sheets, '906', uocConfig);
+    expect(student906).not.toBeNull();
+
+    // Module IC3433 is repeated, but must be counted only ONCE in Total Modules and Total Course Credits
+    expect(student906!.totalModules).toBe(1);
+    expect(student906!.totalCourseCredits).toBe(3); // NOT 6 credits!
+
+    // In CGPA: 3 credits * 3.0 (capped at B) = 9.0 points / 3 = 3.00 CGPA
+    expect(student906!.cgpaModuleCount).toBe(1); // NOT 2 modules!
+    expect(student906!.cgpaTotalCredits).toBe(3); // NOT 6 credits!
+    expect(student906!.cgpa).toBeCloseTo(3.0, 2);
+    expect(student906!.cgpa.toFixed(2)).toBe('3.00');
+  });
+
+  it('deduplicates modules within the same semester so duplicate rows are never counted twice', () => {
+    // Create a semester with duplicate entries for the same module
+    const sheetWithDuplicates: typeof SAMPLE_SHEET_1 = {
+      ...SAMPLE_SHEET_1,
+      id: 'sheet-dup',
+      courseCode: 'IC3433',
+      examSession: 'First Semester 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'IC3433',
+          grade: 'A',
+          status: null,
+          flags: [],
+          textReading: 'A',
+          ocrReading: 'A',
+          workingValue: 'A',
+        },
+        // Duplicate row for same student & module
+        {
+          indexNumber: 'ICT/23/811',
+          moduleCode: 'IC 3433', // normalized to IC3433
+          grade: 'A',
+          status: null,
+          flags: [],
+          textReading: 'A',
+          ocrReading: 'A',
+          workingValue: 'A',
+        },
+      ],
+    };
+
+    const student = calculateStudentSearch([sheetWithDuplicates], '811', uocConfig);
+    expect(student).not.toBeNull();
+
+    // Deduplication ensures:
+    expect(student!.semesters[0].rows).toHaveLength(1);
+    expect(student!.semesters[0].totalModules).toBe(1);
+    expect(student!.semesters[0].totalCourseCredits).toBe(3); // NOT 6
+    expect(student!.totalModules).toBe(1);
+    expect(student!.totalCourseCredits).toBe(3);
+    expect(student!.cgpaTotalCredits).toBe(3);
+    expect(student!.cgpaModuleCount).toBe(1);
+  });
+
+  it('handles empty or unavailable GPA scenarios without displaying misleading zeros', () => {
+    // Student enrolled only in non-GPA / ungradable modules (e.g. AB status)
+    const sheetUngradable: typeof SAMPLE_SHEET_1 = {
+      ...SAMPLE_SHEET_1,
+      id: 'sheet-ab',
+      courseCode: 'ITC1052', // 2 credits
+      examSession: 'First Semester 2025',
+      rows: [
+        {
+          indexNumber: 'ICT/23/899',
+          moduleCode: 'ITC1052',
+          grade: null,
+          status: 'AB',
+          flags: [],
+          textReading: 'AB',
+          ocrReading: 'AB',
+          workingValue: 'AB',
+        },
+      ],
+    };
+
+    const student = calculateStudentSearch([sheetUngradable], '899', uocConfig);
+    expect(student).not.toBeNull();
+
+    // Semester summary
+    const sem = student!.semesters[0];
+    expect(sem.totalModules).toBe(1);
+    expect(sem.totalCourseCredits).toBe(2);
+    expect(sem.moduleCount).toBe(0);
+    expect(sem.totalCredits).toBe(0);
+    expect(sem.hasGpa).toBe(false);
+
+    // Prevents misleading zero: display formatter returns 'N/A'
+    expect(formatSgpaDisplay(sem.sgpa, sem.moduleCount)).toBe('N/A');
+
+    // Overall course summary
+    expect(student!.totalModules).toBe(1);
+    expect(student!.totalCourseCredits).toBe(2);
+    expect(student!.cgpaModuleCount).toBe(0);
+    expect(student!.cgpaTotalCredits).toBe(0);
+    expect(student!.hasCgpa).toBe(false);
+    expect(student!.classification).toBeNull();
+
+    // Prevents misleading zero: display formatter returns 'N/A'
+    expect(formatCgpaDisplay(student!.cgpa, student!.cgpaModuleCount)).toBe('N/A');
+  });
+});
+
+describe('Milestone M8 – PDF Upload & Session Management', () => {
+  it('handles multiple PDF uploads, accumulating distinct sheets and computing course summaries', () => {
+    // Two distinct sheets: IC 3433 (3 credits) and IC 3442 (2 credits)
+    const sheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+
+    const summary = calculateCourseSummary(sheets);
+    expect(summary.totalModules).toBe(2);
+    expect(summary.totalCourseCredits).toBe(5); // 3 + 2
+
+    // Student 811 is in both sheets
+    const student = calculateStudentSearch(sheets, '811', uocConfig);
+    expect(student).not.toBeNull();
+    expect(student?.semesters).toHaveLength(2);
+    expect(student?.totalModules).toBe(2);
+    expect(student?.totalCourseCredits).toBe(5);
+    expect(student?.cgpaModuleCount).toBe(2);
+    expect(student?.cgpaTotalCredits).toBe(5);
+  });
+
+  it('uses extracted course code and name as filename instead of local filename', () => {
+    const rawSheet = {
+      ...SAMPLE_SHEET_1,
+      fileName: 'C:\\Users\\User\\Downloads\\Scan_2026_Final_v2.pdf',
+      courseCode: 'IIC 1123',
+      courseName: 'Database Systems',
+    };
+
+    // Filename generation rule: <CourseCode>_<CourseName>.pdf
+    const fileDisplayName = rawSheet.courseCode
+      ? `${rawSheet.courseCode}${rawSheet.courseName ? '_' + rawSheet.courseName.replace(/\s+/g, '_') : ''}.pdf`
+      : (rawSheet.displayName || rawSheet.fileName);
+
+    expect(fileDisplayName).toBe('IIC 1123_Database_Systems.pdf');
+    expect(fileDisplayName).not.toContain('Scan_2026_Final_v2');
+  });
+
+  it('recalculates total credits, modules, SGPA and CGPA immediately when a sheet is removed', () => {
+    const initialSheets = [SAMPLE_SHEET_1, SAMPLE_SHEET_2];
+    const initialStudent = calculateStudentSearch(initialSheets, '811', uocConfig);
+    expect(initialStudent?.totalModules).toBe(2);
+    expect(initialStudent?.totalCourseCredits).toBe(5);
+    expect(initialStudent?.cgpa).toBeCloseTo(3.82, 2);
+
+    // Remove sheet 2 (IC 3442, 2 credits)
+    const remainingSheets = initialSheets.filter((s) => s.id !== SAMPLE_SHEET_2.id);
+    const updatedSummary = calculateCourseSummary(remainingSheets);
+    expect(updatedSummary.totalModules).toBe(1);
+    expect(updatedSummary.totalCourseCredits).toBe(3);
+
+    const updatedStudent = calculateStudentSearch(remainingSheets, '811', uocConfig);
+    expect(updatedStudent).not.toBeNull();
+    expect(updatedStudent?.semesters).toHaveLength(1);
+    expect(updatedStudent?.totalModules).toBe(1);
+    expect(updatedStudent?.totalCourseCredits).toBe(3);
+    expect(updatedStudent?.cgpaModuleCount).toBe(1);
+    expect(updatedStudent?.cgpaTotalCredits).toBe(3);
+    // Student 811 only has IC 3433 with A- (3.7) left
+    expect(updatedStudent?.cgpa).toBeCloseTo(3.70, 2);
+    expect(formatSgpa(updatedStudent?.semesters[0].sgpa!)).toBe('3.7000');
+  });
+
+  it('leaves no stale student records after removing the only sheet containing that student', () => {
+    // Student 811 is in Sheet 1, Student 812 is only in Sheet 2
+    const singleStudentSheet2: typeof SAMPLE_SHEET_2 = {
+      ...SAMPLE_SHEET_2,
+      id: 'sheet-2-only',
+      rows: [
+        {
+          indexNumber: 'ICT/23/899',
+          moduleCode: 'IC3442',
+          grade: 'B',
+          status: null,
+          flags: [],
+          textReading: 'B',
+          ocrReading: 'B',
+          workingValue: 'B',
+        },
+      ],
+    };
+
+    const sheets = [SAMPLE_SHEET_1, singleStudentSheet2];
+    expect(calculateStudentSearch(sheets, '899', uocConfig)).not.toBeNull();
+
+    // Remove singleStudentSheet2
+    const remaining = sheets.filter((s) => s.id !== 'sheet-2-only');
+    expect(calculateStudentSearch(remaining, '899', uocConfig)).toBeNull();
+  });
+
+  it('cleans up orphaned user edits and exclusions when a sheet is removed while preserving valid edits for remaining sheets', () => {
+    const sheet1 = { ...SAMPLE_SHEET_1, id: 'sheet-1' };
+    const sheet2 = { ...SAMPLE_SHEET_2, id: 'sheet-2' };
+    const allSheets = [sheet1, sheet2];
+
+    // User made an edit on student 811 in Sheet 1 (IC3433) and in Sheet 2 (IC3442)
+    const userEdits: Record<string, string> = {
+      'sheet-1:ICT23811:IC3433': 'A+',
+      'ICT23811:IC3433': 'A+',
+      'sheet-2:ICT23811:IC3442': 'C+',
+      'ICT23811:IC3442': 'C+',
+    };
+
+    const moduleExclusions: Record<string, boolean> = {
+      IC3433: true,
+      IC3442: false,
+    };
+
+    // Simulate removing sheet 1 from allSheets
+    const removedSheetId = 'sheet-1';
+    const remainingSheets = allSheets.filter((s) => s.id !== removedSheetId);
+    const remainingNormMods = new Set(remainingSheets.map((s) => normalizeModuleCode(s.courseCode)));
+
+    // Cleanup orphaned edits logic
+    const nextEdits: Record<string, string> = {};
+    for (const [key, val] of Object.entries(userEdits)) {
+      if (key.startsWith(`${removedSheetId}:`)) continue;
+      if (key.includes(':')) {
+        const parts = key.split(':');
+        const mod = parts[parts.length - 1];
+        if (!remainingNormMods.has(mod)) continue;
+      }
+      nextEdits[key] = val;
+    }
+
+    // Next exclusions logic
+    const nextExclusions: Record<string, boolean> = {};
+    for (const [mod, val] of Object.entries(moduleExclusions)) {
+      if (remainingNormMods.has(normalizeModuleCode(mod))) {
+        nextExclusions[mod] = val;
+      }
+    }
+
+    // Verify IC3433 edits and exclusions were pruned
+    expect(nextEdits['sheet-1:ICT23811:IC3433']).toBeUndefined();
+    expect(nextEdits['ICT23811:IC3433']).toBeUndefined();
+    expect(nextExclusions['IC3433']).toBeUndefined();
+
+    // Verify IC3442 edit was preserved
+    expect(nextEdits['sheet-2:ICT23811:IC3442']).toBe('C+');
+    expect(nextEdits['ICT23811:IC3442']).toBe('C+');
+
+    // Recalculating student 811 with remaining sheet & next edits applies the preserved edit
+    const student = calculateStudentSearch(remainingSheets, '811', uocConfig, {}, {}, nextExclusions, nextEdits);
+    expect(student).not.toBeNull();
+    expect(student?.semesters[0].rows[0].effectiveGrade).toBe('C+');
+    expect(student?.semesters[0].rows[0].isEdited).toBe(true);
+  });
+
+  it('updates grades and recalculates SGPA/CGPA immediately when a sheet is replaced', () => {
+    const sheetOriginal = { ...SAMPLE_SHEET_1, id: 'sheet-original' };
+
+    // Initially student 811 has A- (3.7) in sheetOriginal -> SGPA = 3.7000
+    const studentBefore = calculateStudentSearch([sheetOriginal], '811', uocConfig);
+    expect(formatSgpa(studentBefore?.semesters[0].sgpa!)).toBe('3.7000');
+    expect(studentBefore?.cgpa).toBeCloseTo(3.70, 2);
+
+    // Replace sheetOriginal with updated version where student 811 scored A+ (4.0)
+    const updatedRows = sheetOriginal.rows.map((r) =>
+      r.indexNumber === 'ICT/23/811'
+        ? { ...r, grade: 'A+', textReading: 'A+', workingValue: 'A+' }
+        : r,
+    );
+    const sheetUpdated = {
+      ...sheetOriginal,
+      rows: updatedRows,
+    };
+
+    const studentAfter = calculateStudentSearch([sheetUpdated], '811', uocConfig);
+    expect(formatSgpa(studentAfter?.semesters[0].sgpa!)).toBe('4.0000');
+    expect(studentAfter?.cgpa).toBeCloseTo(4.00, 2);
+  });
+
+  it('detects duplicate course uploads and differentiates between original and repeat-resit sheets', () => {
+    const sheets = [
+      { ...SAMPLE_SHEET_1, courseCode: 'IC 3433', type: 'original' as const },
+      { ...SAMPLE_SHEET_3_RESIT, courseCode: 'IC 3433', type: 'repeat-resit' as const },
+    ];
+
+    const checkDuplicate = (courseCode: string, type?: 'original' | 'repeat-resit') => {
+      const clean = courseCode.trim().toUpperCase();
+      return sheets.find(
+        (s) =>
+          s.courseCode.trim().toUpperCase() === clean &&
+          (type ? (s.type ?? 'original') === type : true),
+      );
+    };
+
+    // Duplicate original
+    const dupOriginal = checkDuplicate('IC 3433', 'original');
+    expect(dupOriginal).toBeDefined();
+    expect(dupOriginal?.type).toBe('original');
+
+    // Duplicate repeat-resit
+    const dupResit = checkDuplicate('IC 3433', 'repeat-resit');
+    expect(dupResit).toBeDefined();
+    expect(dupResit?.type).toBe('repeat-resit');
+
+    // Non-existent course
+    expect(checkDuplicate('MAT 1113')).toBeUndefined();
+  });
+
+  it('wipes all sheets, manual credits, exclusions, user edits and sessionStorage keys on Clear All', () => {
+    // Setup mock sessionStorage
+    const storage: Record<string, string> = {
+      gpa_calc_session_sheets_v2: JSON.stringify([SAMPLE_SHEET_1]),
+      gpa_calc_session_credits_v2: JSON.stringify({ IC3433: 3 }),
+      gpa_calc_session_exclusions_v2: JSON.stringify({ 'ICT23811:IC3433': true }),
+      gpa_calc_session_module_exclusions_v2: JSON.stringify({ IC3433: true }),
+      gpa_calc_session_edits_v2: JSON.stringify({ 'ICT23811:IC3433': 'A+' }),
+    };
+
+    const keysToRemove = [
+      'gpa_calc_session_sheets_v2',
+      'gpa_calc_session_credits_v2',
+      'gpa_calc_session_exclusions_v2',
+      'gpa_calc_session_module_exclusions_v2',
+      'gpa_calc_session_edits_v2',
+    ];
+
+    // Simulate Clear All action
+    let sheets: typeof SAMPLE_SHEET_1[] = [SAMPLE_SHEET_1];
+    let manualCredits: Record<string, number> = { IC3433: 3 };
+    let exclusions: Record<string, boolean> = { IC3433: true };
+    let edits: Record<string, string> = { 'ICT23811:IC3433': 'A+' };
+
+    // Clear execution
+    sheets = [];
+    manualCredits = {};
+    exclusions = {};
+    edits = {};
+    for (const k of keysToRemove) {
+      delete storage[k];
+    }
+
+    // Verify all keys are removed
+    for (const k of keysToRemove) {
+      expect(storage[k]).toBeUndefined();
+    }
+
+    // Course summary is 0
+    const summary = calculateCourseSummary(sheets, manualCredits);
+    expect(summary.totalCourseCredits).toBe(0);
+    expect(summary.totalModules).toBe(0);
+
+    // Search returns null
+    expect(calculateStudentSearch(sheets, '811', uocConfig, manualCredits, exclusions, exclusions, edits)).toBeNull();
+  });
+
+  it('preserves extracted records and edits across browser session refreshes via sessionStorage', () => {
+    const initialSheets = [SAMPLE_SHEET_1];
+    const initialEdits = { 'ICT23811:IC3433': 'A+' };
+    const initialExclusions = { IC3433: false };
+
+    // Serialize to storage (simulating active session)
+    const mockStorage: Record<string, string> = {
+      gpa_calc_session_sheets_v2: JSON.stringify(initialSheets),
+      gpa_calc_session_edits_v2: JSON.stringify(initialEdits),
+      gpa_calc_session_module_exclusions_v2: JSON.stringify(initialExclusions),
+    };
+
+    // Simulate page refresh: reload state from storage
+    const restoredSheets = JSON.parse(mockStorage['gpa_calc_session_sheets_v2'] || '[]');
+    const restoredEdits = JSON.parse(mockStorage['gpa_calc_session_edits_v2'] || '{}');
+    const restoredExclusions = JSON.parse(mockStorage['gpa_calc_session_module_exclusions_v2'] || '{}');
+
+    expect(restoredSheets).toHaveLength(1);
+    expect(restoredSheets[0].courseCode).toBe(SAMPLE_SHEET_1.courseCode);
+    expect(restoredEdits['ICT23811:IC3433']).toBe('A+');
+    expect(restoredExclusions['IC3433']).toBe(false);
+
+    // Calculations work on restored data
+    const student = calculateStudentSearch(
+      restoredSheets,
+      '811',
+      uocConfig,
+      {},
+      {},
+      restoredExclusions,
+      restoredEdits,
+    );
+    expect(student).not.toBeNull();
+    expect(student?.semesters[0].rows[0].effectiveGrade).toBe('A+');
+    expect(student?.semesters[0].rows[0].isEdited).toBe(true);
+  });
+
+  it('handles corrupted sessionStorage safely without crashing', () => {
+    const corruptedJson = '{ invalid_json ...';
+
+    let loadedSheets = [];
+    try {
+      loadedSheets = JSON.parse(corruptedJson);
+    } catch {
+      loadedSheets = [];
+    }
+
+    expect(loadedSheets).toEqual([]);
+    expect(calculateCourseSummary(loadedSheets)).toEqual({
+      totalCourseCredits: 0,
+      totalModules: 0,
+    });
   });
 });

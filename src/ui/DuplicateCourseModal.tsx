@@ -52,7 +52,9 @@ const DuplicateCourseModal: FC<DuplicateCourseModalProps> = ({
 
         <div className="modal-body">
           <p style={{ fontSize: '0.875rem', color: 'var(--text-secondary)', marginBottom: '1rem' }}>
-            A result sheet for this course already exists in the current session. How would you like to handle the incoming sheet?
+            {existingSheet.fileName === newSheet.fileName
+              ? `The file "${newSheet.fileName}" for course ${newSheet.courseCode} has already been uploaded in this session. You can replace the existing sheet or keep it as a repeat session to avoid duplicate counts.`
+              : `A result sheet for course ${newSheet.courseCode} (${newSheet.courseName}) is already loaded in the current session. How would you like to handle the incoming sheet?`}
           </p>
 
           <div

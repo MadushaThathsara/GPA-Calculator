@@ -25,6 +25,14 @@ export type Grade =
   | 'D'
   | 'E';
 
+/** Canonical list of supported letter grades. */
+export const VALID_GRADES: Grade[] = [
+  'A+', 'A', 'A-',
+  'B+', 'B', 'B-',
+  'C+', 'C', 'C-',
+  'D', 'E',
+];
+
 /** Maps each grade letter to its GPA point value. */
 export type GradeScale = Record<Grade, number>;
 
@@ -46,6 +54,30 @@ export type StatusCode =
   | 'E(CA) & AB(ESA)'
   | 'N'
   | 'W';
+
+/** Canonical list of supported result status codes. */
+export const VALID_STATUSES: StatusCode[] = [
+  'E',
+  'E(ESA)',
+  'E(CA)',
+  'AB',
+  'AB(ESA)',
+  'AB(CA)',
+  'AB(CA) & AB(ESA)',
+  'E(CA) & AB(ESA)',
+  'N',
+  'W',
+];
+
+/** All valid grade and status values for user editing. */
+export const ALL_VALID_GRADE_STATUS = [...VALID_GRADES, ...VALID_STATUSES];
+
+/** Validates whether a given string is a valid grade or status. */
+export function isValidGradeOrStatus(val: string): boolean {
+  if (!val || typeof val !== 'string') return false;
+  const trimmed = val.trim();
+  return (ALL_VALID_GRADE_STATUS as string[]).includes(trimmed);
+}
 
 /** Whether a status contributes to GPA (counted at 0.0) or is excluded. */
 export type StatusRule = {

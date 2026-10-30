@@ -88,3 +88,29 @@ export function formatSgpa(sgpa: number): string {
   if (!Number.isFinite(sgpa)) return '0.0000';
   return sgpa.toFixed(4);
 }
+
+/**
+ * Formats an SGPA value for display with exactly 4 decimal places,
+ * or returns 'N/A' when GPA is unavailable (e.g. 0 eligible GPA modules).
+ *
+ * @param sgpa - Numeric SGPA value.
+ * @param moduleCount - Count of eligible GPA modules in the semester.
+ * @returns Formatted SGPA string or 'N/A'.
+ */
+export function formatSgpaDisplay(sgpa: number, moduleCount: number): string {
+  if (moduleCount === 0 || !Number.isFinite(sgpa)) return 'N/A';
+  return sgpa.toFixed(4);
+}
+
+/**
+ * Formats a CGPA value for display with 2 decimal places,
+ * or returns 'N/A' when CGPA cannot yet be calculated (0 eligible GPA modules).
+ *
+ * @param cgpa - Numeric CGPA value.
+ * @param moduleCount - Count of eligible GPA modules across all semesters.
+ * @returns Formatted CGPA string or 'N/A'.
+ */
+export function formatCgpaDisplay(cgpa: number, moduleCount: number): string {
+  if (moduleCount === 0 || !Number.isFinite(cgpa)) return 'N/A';
+  return cgpa.toFixed(2);
+}

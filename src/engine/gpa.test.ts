@@ -7,7 +7,7 @@
  * Modules with gpaGrade === null are excluded.
  */
 import { describe, it, expect } from 'vitest';
-import { calculateSgpa, calculateCgpa, formatSgpa } from './gpa';
+import { calculateSgpa, calculateCgpa, formatSgpa, formatSgpaDisplay, formatCgpaDisplay } from './gpa';
 import type { GradeScale } from '../rules/schema';
 
 // Use the provisional grade scale from spec §4
@@ -127,5 +127,29 @@ describe('formatSgpa (4 decimal precision display)', () => {
     expect(formatSgpa(NaN)).toBe('0.0000');
     expect(formatSgpa(Infinity)).toBe('0.0000');
     expect(formatSgpa(-Infinity)).toBe('0.0000');
+  });
+});
+
+describe('formatSgpaDisplay & formatCgpaDisplay (M7 display rules)', () => {
+  it('formats SGPA to 4 decimal places when modules are available', () => {
+    expect(formatSgpaDisplay(3.4567, 3)).toBe('3.4567');
+    expect(formatSgpaDisplay(3.5, 2)).toBe('3.5000');
+    expect(formatSgpaDisplay(4.0, 1)).toBe('4.0000');
+  });
+
+  it('returns N/A for SGPA when 0 GPA modules are available (prevents misleading zero)', () => {
+    expect(formatSgpaDisplay(0, 0)).toBe('N/A');
+    expect(formatSgpaDisplay(3.5, 0)).toBe('N/A');
+  });
+
+  it('formats CGPA to 2 decimal places when modules are available', () => {
+    expect(formatCgpaDisplay(3.82, 4)).toBe('3.82');
+    expect(formatCgpaDisplay(4.0, 2)).toBe('4.00');
+    expect(formatCgpaDisplay(2.5, 1)).toBe('2.50');
+  });
+
+  it('returns N/A for CGPA when 0 GPA modules are available (prevents misleading zero)', () => {
+    expect(formatCgpaDisplay(0, 0)).toBe('N/A');
+    expect(formatCgpaDisplay(2.5, 0)).toBe('N/A');
   });
 });

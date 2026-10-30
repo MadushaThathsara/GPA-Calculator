@@ -718,6 +718,137 @@ code  { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.875e
   border: 1px solid rgba(52,211,153,0.25);
 }
 
+/* ── Grade & Status inline editor ────────────────────────────────────────── */
+.grade-edit-btn {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--text-secondary);
+  cursor: pointer;
+  padding: 0.15rem 0.35rem;
+  font-size: 0.75rem;
+  line-height: 1;
+  opacity: 0.7;
+  transition: opacity var(--t-fast), border-color var(--t-fast), background var(--t-fast);
+}
+.grade-edit-btn:hover,
+.grade-edit-btn:focus-visible {
+  opacity: 1;
+  background: var(--bg-card);
+  border-color: var(--border-hov);
+  color: var(--text-primary);
+}
+.grade-edit-select {
+  background: var(--bg-base);
+  color: var(--text-primary);
+  border: 1px solid var(--accent-1);
+  border-radius: var(--r-sm);
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8125rem;
+  font-family: inherit;
+  outline: none;
+  cursor: pointer;
+}
+.grade-edit-select:focus {
+  border-color: var(--accent-2);
+  box-shadow: 0 0 0 2px var(--accent-glow);
+}
+.grade-edit-select optgroup {
+  background: var(--bg-surface);
+  color: var(--text-secondary);
+  font-weight: 700;
+}
+.grade-edit-select option {
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-weight: 500;
+}
+
+/* ── Course Summary Card & Grid (M7) ─────────────────────────────────────── */
+.course-summary-card {
+  padding: 1.25rem 1.5rem;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.course-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 1rem;
+}
+
+.summary-stat-box {
+  background: rgba(255, 255, 255, 0.02);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  padding: 1rem;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  transition: border-color var(--t-fast), background var(--t-fast);
+}
+
+.summary-stat-box:hover {
+  background: rgba(255, 255, 255, 0.04);
+  border-color: var(--border-hov);
+}
+
+.summary-stat-box__value {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: var(--text-primary);
+  line-height: 1.1;
+  margin-bottom: 0.35rem;
+  letter-spacing: -0.02em;
+}
+
+.summary-stat-box__value--cgpa {
+  background: linear-gradient(135deg, var(--accent-1), var(--violet));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+.summary-stat-box__value--class {
+  font-size: 1.05rem;
+  color: var(--violet);
+  background: linear-gradient(135deg, rgba(99,102,241,0.2), rgba(167,139,250,0.2));
+  border: 1px solid rgba(167,139,250,0.35);
+  border-radius: var(--r-full);
+  padding: 0.25rem 0.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.summary-stat-box__value--na {
+  color: var(--text-muted);
+  font-size: 1.25rem;
+  font-style: italic;
+  font-weight: 600;
+}
+
+.summary-stat-box__label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 0.25rem;
+}
+
+.summary-stat-box__sub {
+  font-size: 0.6875rem;
+  color: var(--text-muted);
+  line-height: 1.3;
+}
+
+.summary-stat-box__sub--warning {
+  color: var(--warning);
+}
+
 /* ── GPA summary panel ──────────────────────────────────────────────────── */
 .gpa-summary {
   display: grid;

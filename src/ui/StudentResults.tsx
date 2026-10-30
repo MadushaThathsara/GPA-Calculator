@@ -17,6 +17,8 @@ interface StudentResultsProps {
   onSetManualCredit?: (moduleCode: string, credits: number) => void;
   onToggleExclude?: (indexNumber: string, moduleCode: string) => void;
   onToggleModule?: (moduleCode: string) => void;
+  onSetGradeEdit?: (indexNumber: string, moduleCode: string, newValue: string, sheetId?: string) => void;
+  onClearGradeEdit?: (indexNumber: string, moduleCode: string, sheetId?: string) => void;
 }
 
 const StudentResults: FC<StudentResultsProps> = ({
@@ -25,8 +27,11 @@ const StudentResults: FC<StudentResultsProps> = ({
   onSetManualCredit,
   onToggleExclude,
   onToggleModule,
+  onSetGradeEdit,
+  onClearGradeEdit,
 }) => {
   const { indexNumber, semesters, cgpa, classification } = result;
+  const hasCgpa = result.hasCgpa ?? (result.cgpaModuleCount > 0);
 
   return (
     <section aria-label={`Results for ${indexNumber}`} className="animate-in">
@@ -71,12 +76,28 @@ const StudentResults: FC<StudentResultsProps> = ({
           </p>
         </div>
 
-        {/* Overall stats badges — Course Summary (Total Course Credits and Total Modules only, no separate GPA credits/modules) */}
+        {/* Overall stats badges — Course Summary chips */}
         <div style={{ display: 'flex', gap: '0.625rem', flexWrap: 'wrap', alignItems: 'center' }}>
-          <span className="stat-chip stat-chip--cgpa" style={{ fontSize: '0.8125rem', padding: '0.35rem 0.75rem' }}>
-            CGPA {cgpa.toFixed(2)}
-          </span>
-          {classification && (
+          {hasCgpa ? (
+            <span className="stat-chip stat-chip--cgpa" style={{ fontSize: '0.8125rem', padding: '0.35rem 0.75rem' }}>
+              CGPA {cgpa.toFixed(2)}
+            </span>
+          ) : (
+            <span
+              className="stat-chip"
+              style={{
+                fontSize: '0.8125rem',
+                padding: '0.35rem 0.75rem',
+                background: 'rgba(255,255,255,0.05)',
+                color: 'var(--text-muted)',
+                border: '1px solid var(--border)',
+              }}
+              title="CGPA cannot yet be calculated (no eligible GPA modules)"
+            >
+              CGPA N/A
+            </span>
+          )}
+          {hasCgpa && classification && (
             <span className="stat-chip stat-chip--class" style={{ fontSize: '0.8125rem', padding: '0.35rem 0.75rem' }}>
               {classification}
             </span>
@@ -90,6 +111,87 @@ const StudentResults: FC<StudentResultsProps> = ({
         </div>
       </div>
 
+      {/* ── Overall Course Summary Card (M7) ── */}
+      <div className="card course-summary-card animate-in" style={{ marginBottom: '1.5rem' }} aria-label="Overall Course Summary">
+        <div className="card__header" style={{ marginBottom: '1rem' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.625rem' }}>
+            <div className="card__icon card__icon--indigo" aria-hidden="true">📊</div>
+            <div>
+              <p className="card__title" style={{ fontSize: '1.05rem', fontWeight: 700 }}>Overall Course Summary</p>
+              <p className="card__subtitle" style={{ fontSize: '0.75rem' }}>
+                Cumulative academic progress across all {semesters.length} loaded semester{semesters.length !== 1 ? 's' : ''}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <div className="course-summary-grid">
+          {/* Total Course Credits */}
+          <div className="summary-stat-box">
+            <div className="summary-stat-box__value">{result.totalCourseCredits}</div>
+            <div className="summary-stat-box__label">Total Course Credits</div>
+            <div className="summary-stat-box__sub">GPA + Non-GPA modules</div>
+          </div>
+
+          {/* Total Modules */}
+          <div className="summary-stat-box">
+            <div className="summary-stat-box__value">{result.totalModules}</div>
+            <div className="summary-stat-box__label">Total Modules</div>
+            <div className="summary-stat-box__sub">GPA + Non-GPA modules</div>
+          </div>
+
+          {/* Overall CGPA */}
+          <div className="summary-stat-box">
+            {hasCgpa ? (
+              <>
+                <div className="summary-stat-box__value summary-stat-box__value--cgpa">
+                  {cgpa.toFixed(2)}
+                </div>
+                <div className="summary-stat-box__label">Overall CGPA</div>
+                <div className="summary-stat-box__sub">
+                  from {result.cgpaModuleCount} module{result.cgpaModuleCount !== 1 ? 's' : ''} ({result.cgpaTotalCredits} GPA cr)
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="summary-stat-box__value summary-stat-box__value--na">N/A</div>
+                <div className="summary-stat-box__label">Overall CGPA</div>
+                <div className="summary-stat-box__sub summary-stat-box__sub--warning">
+                  CGPA cannot yet be calculated (no eligible GPA modules)
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* Degree Classification */}
+          <div className="summary-stat-box">
+            {hasCgpa && classification ? (
+              <>
+                <div className="summary-stat-box__value summary-stat-box__value--class">
+                  🎓 {classification}
+                </div>
+                <div className="summary-stat-box__label">Degree Classification</div>
+                <div className="summary-stat-box__sub">provisional, subject to completion</div>
+              </>
+            ) : hasCgpa ? (
+              <>
+                <div className="summary-stat-box__value" style={{ fontSize: '1.125rem', color: 'var(--text-muted)' }}>
+                  —
+                </div>
+                <div className="summary-stat-box__label">Degree Classification</div>
+                <div className="summary-stat-box__sub">Below minimum class threshold</div>
+              </>
+            ) : (
+              <>
+                <div className="summary-stat-box__value summary-stat-box__value--na">—</div>
+                <div className="summary-stat-box__label">Degree Classification</div>
+                <div className="summary-stat-box__sub">Available once GPA modules are included</div>
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+
       {/* ── Semester sections ── */}
       {semesters.map((sem, idx) => (
         <ResultsTable
@@ -99,11 +201,14 @@ const StudentResults: FC<StudentResultsProps> = ({
           cgpaModuleCount={result.cgpaModuleCount}
           cgpaTotalCredits={result.cgpaTotalCredits}
           classification={classification}
+          hasCgpa={hasCgpa}
           isLatest={idx === semesters.length - 1}
           moduleExclusions={moduleExclusions}
           onSetManualCredit={onSetManualCredit}
           onToggleExclude={onToggleExclude}
           onToggleModule={onToggleModule}
+          onSetGradeEdit={onSetGradeEdit}
+          onClearGradeEdit={onClearGradeEdit}
           studentIndexNumber={indexNumber}
         />
       ))}

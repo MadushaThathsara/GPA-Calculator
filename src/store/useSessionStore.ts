@@ -21,9 +21,11 @@ import type { UniversityConfig } from '../rules/schema';
 import { creditFromCode } from '../engine/credits';
 import { gradePoints } from '../engine/gradePoints';
 import { effectiveResult, isGradableResit } from '../engine/effectiveResult';
-import { calculateSgpa, calculateCgpa } from '../engine/gpa';
+import { calculateSgpa, calculateCgpa, type GpaInput } from '../engine/gpa';
 import { classify } from '../engine/classification';
 import type { Grade } from '../rules/schema';
+import { isValidGradeOrStatus } from '../rules/schema';
+import { parseCellValue } from '../extract/parseStatus';
 import { extractAcademicYear, parseSemesterHeading } from '../extract/pdfText';
 
 // ---------------------------------------------------------------------------
@@ -82,6 +84,10 @@ export interface SemesterRowItem {
   excluded: boolean;
   isUserExcluded: boolean;
   resitInfo?: ResitDetail;
+  originalGrade?: string | null;
+  originalStatus?: string | null;
+  editedValue?: string | null;
+  isEdited?: boolean;
 }
 
 /** One semester's aggregated results for a specific student. */
@@ -96,6 +102,7 @@ export interface SemesterResult {
   totalCredits: number;
   totalCourseCredits: number;
   totalModules: number;
+  hasGpa?: boolean;
 }
 
 /** Full search result for a student. */
@@ -108,12 +115,14 @@ export interface StudentSearchResult {
   totalCourseCredits: number;
   totalModules: number;
   classification: string | null;
+  hasCgpa?: boolean;
 }
 
 const STORAGE_KEY = 'gpa_calc_session_sheets_v2';
 const MANUAL_CREDITS_KEY = 'gpa_calc_session_credits_v2';
 const EXCLUSIONS_KEY = 'gpa_calc_session_exclusions_v2';
 const MODULE_EXCLUSIONS_KEY = 'gpa_calc_session_module_exclusions_v2';
+const EDITS_KEY = 'gpa_calc_session_edits_v2';
 
 // ---------------------------------------------------------------------------
 // Pure Helpers
@@ -154,8 +163,50 @@ export function calculateCourseSummary(
 }
 
 /**
+ * Resolves the effective working grade and status for a row,
+ * taking user edits into account while keeping original extracted values untouched.
+ */
+export function resolveRowGradeStatus(
+  sheetId: string,
+  indexNumber: string,
+  moduleCode: string,
+  originalGrade: string | null,
+  originalStatus: string | null,
+  userEdits: Record<string, string> = {},
+): {
+  workingGrade: string | null;
+  workingStatus: string | null;
+  editedValue: string | null;
+  isEdited: boolean;
+} {
+  const normMod = normalizeModuleCode(moduleCode);
+  const normIdx = normalizeIndex(indexNumber);
+  const editKeySheet = `${sheetId}:${normIdx}:${normMod}`;
+  const editKeyGen = `${normIdx}:${normMod}`;
+  const editedVal = userEdits[editKeySheet] ?? userEdits[editKeyGen];
+  const isEdited = editedVal !== undefined && editedVal !== null && editedVal !== '';
+
+  if (!isEdited) {
+    return {
+      workingGrade: originalGrade,
+      workingStatus: originalStatus,
+      editedValue: null,
+      isEdited: false,
+    };
+  }
+
+  const parsed = parseCellValue(editedVal);
+  return {
+    workingGrade: parsed.grade,
+    workingStatus: parsed.statuses.length > 0 ? parsed.statuses[0] : null,
+    editedValue: editedVal,
+    isEdited: true,
+  };
+}
+
+/**
  * Pure calculation function: searches for a student across all sheets,
- * applies repeat/resit rules, credit overrides, and exclusions,
+ * applies repeat/resit rules, credit overrides, exclusions, and user edits,
  * then returns SGPA, CGPA, and degree classification.
  */
 export function calculateStudentSearch(
@@ -165,6 +216,7 @@ export function calculateStudentSearch(
   manualCredits: Record<string, number> = {},
   userExclusions: Record<string, boolean> = {},
   moduleExclusions: Record<string, boolean> = {},
+  userEdits: Record<string, string> = {},
 ): StudentSearchResult | null {
   const q = normalizeIndex(rawQuery);
   if (!q) return null;
@@ -205,14 +257,45 @@ export function calculateStudentSearch(
     }
   });
 
-  const studentRepeatRows = new Map<string, MockResultRow>();
+  const studentRepeatRows = new Map<
+    string,
+    {
+      row: MockResultRow;
+      workingGrade: string | null;
+      workingStatus: string | null;
+      isEdited: boolean;
+      editedValue: string | null;
+    }
+  >();
   for (const [code, candidates] of repeatCandidates.entries()) {
-    // Gradable candidates have a letter grade or in-GPA fail status
-    const gradable = candidates.filter((c) => isGradableResit(c.row.grade, c.row.status));
-    const pool = gradable.length > 0 ? gradable : candidates;
-    // Sort pool by order descending (latest upload)
+    const resolvedCandidates = candidates.map((c) => {
+      const resolved = resolveRowGradeStatus(
+        c.sheet.id,
+        c.row.indexNumber,
+        c.row.moduleCode,
+        c.row.grade,
+        c.row.status,
+        userEdits,
+      );
+      return {
+        ...c,
+        resolved,
+      };
+    });
+
+    const gradable = resolvedCandidates.filter((c) =>
+      isGradableResit(c.resolved.workingGrade, c.resolved.workingStatus),
+    );
+    const pool = gradable.length > 0 ? gradable : resolvedCandidates;
     pool.sort((a, b) => b.order - a.order);
-    studentRepeatRows.set(code, pool[0].row);
+    const best = pool[0];
+    studentRepeatRows.set(code, {
+      row: best.row,
+      workingGrade: best.resolved.workingGrade,
+      workingStatus: best.resolved.workingStatus,
+      isEdited: best.resolved.isEdited,
+      editedValue: best.resolved.editedValue,
+    });
   }
 
   // Group original sheets by semester session (spec §2, §4, §15 M4)
@@ -257,31 +340,40 @@ export function calculateStudentSearch(
         const credits = manualCr !== undefined ? manualCr : (inferredCr ?? 0);
         const manualCreditApplied = manualCr !== undefined;
 
+        const resolved = resolveRowGradeStatus(
+          sheet.id,
+          row.indexNumber,
+          row.moduleCode,
+          row.grade,
+          row.status,
+          userEdits,
+        );
+
         // Check for repeat result
-        const repeatRow = studentRepeatRows.get(modCode);
+        const repeatInfo = studentRepeatRows.get(modCode);
         let resitInfo: ResitDetail | undefined;
         let effective;
 
-        if (repeatRow) {
+        if (repeatInfo) {
           effective = effectiveResult({
-            originalGrade: row.grade as Grade | null,
-            originalStatus: row.status,
-            repeatGrade: repeatRow.grade as Grade | null,
-            repeatStatus: repeatRow.status,
+            originalGrade: resolved.workingGrade as Grade | null,
+            originalStatus: resolved.workingStatus,
+            repeatGrade: repeatInfo.workingGrade as Grade | null,
+            repeatStatus: repeatInfo.workingStatus,
             config,
           });
           resitInfo = {
-            originalGrade: row.grade,
-            originalStatus: row.status,
-            repeatGrade: repeatRow.grade,
-            repeatStatus: repeatRow.status,
+            originalGrade: resolved.workingGrade,
+            originalStatus: resolved.workingStatus,
+            repeatGrade: repeatInfo.workingGrade,
+            repeatStatus: repeatInfo.workingStatus,
             capped: effective.capped,
             note: effective.note,
           };
         } else {
           effective = effectiveResult({
-            originalGrade: row.grade as Grade | null,
-            originalStatus: row.status,
+            originalGrade: resolved.workingGrade as Grade | null,
+            originalStatus: resolved.workingStatus,
             repeatGrade: null,
             repeatStatus: null,
             config,
@@ -302,8 +394,24 @@ export function calculateStudentSearch(
             ? null
             : gradePoints(gpaGrade, config.gradeScale);
 
+        const rowFlags = resolved.isEdited && !row.flags.includes('edited')
+          ? [...row.flags, 'edited' as const]
+          : row.flags;
+
+        const effectiveRowGrade = resolved.isEdited ? resolved.workingGrade : row.grade;
+        const effectiveRowStatus = resolved.isEdited ? resolved.workingStatus : row.status;
+        const effectiveWorkingValue = resolved.isEdited
+          ? (resolved.editedValue ?? row.workingValue)
+          : row.workingValue;
+
         semesterRowItems.push({
-          row,
+          row: {
+            ...row,
+            grade: effectiveRowGrade,
+            status: effectiveRowStatus,
+            workingValue: effectiveWorkingValue,
+            flags: rowFlags,
+          },
           courseName: sheet.courseName,
           sheetId: sheet.id,
           sheetDisplayName: sheet.displayName,
@@ -315,13 +423,28 @@ export function calculateStudentSearch(
           excluded,
           isUserExcluded: isModuleExcluded,
           resitInfo,
+          originalGrade: row.grade,
+          originalStatus: row.status,
+          editedValue: resolved.editedValue,
+          isEdited: resolved.isEdited,
         });
       }
     }
 
     if (semesterRowItems.length === 0) continue;
 
-    const gpaInputs = semesterRowItems.map((d) => ({
+    // Deduplicate semester rows by normalized module code so duplicate rows are never counted twice (spec §4 & M7)
+    const distinctSemesterRows: SemesterRowItem[] = [];
+    const seenSemesterMods = new Set<string>();
+    for (const item of semesterRowItems) {
+      const norm = normalizeModuleCode(item.row.moduleCode);
+      if (!seenSemesterMods.has(norm)) {
+        seenSemesterMods.add(norm);
+        distinctSemesterRows.push(item);
+      }
+    }
+
+    const gpaInputs = distinctSemesterRows.map((d) => ({
       gpaGrade: d.excluded ? null : (d.effectiveGrade as Grade | null),
       credits: d.credits,
     }));
@@ -332,27 +455,22 @@ export function calculateStudentSearch(
     );
 
     // Total Course Credits and Total Modules include ALL modules in this semester (both GPA & Non-GPA, green or red)
-    const semDistinct = new Map<string, number>();
-    for (const item of semesterRowItems) {
-      const norm = normalizeModuleCode(item.row.moduleCode);
-      if (!semDistinct.has(norm)) {
-        semDistinct.set(norm, item.credits);
-      }
-    }
-    const semTotalModules = semDistinct.size;
-    const semTotalCourseCredits = Array.from(semDistinct.values()).reduce((sum, cr) => sum + cr, 0);
+    const semTotalModules = distinctSemesterRows.length;
+    const semTotalCourseCredits = distinctSemesterRows.reduce((sum, item) => sum + item.credits, 0);
+    const hasGpa = moduleCount > 0;
 
     semesters.push({
       sheet: group.sheets[0],
       sheets: group.sheets,
       semesterName: group.semesterName,
       isUnassigned: group.isUnassigned,
-      rows: semesterRowItems,
+      rows: distinctSemesterRows,
       sgpa,
       moduleCount,
       totalCredits,
       totalCourseCredits: semTotalCourseCredits,
       totalModules: semTotalModules,
+      hasGpa,
     });
   }
 
@@ -379,11 +497,20 @@ export function calculateStudentSearch(
             !!normUserExclusions[normCode] ||
             !!normUserExclusions[exclusionKey];
 
+          const resolved = resolveRowGradeStatus(
+            rSheet.id,
+            r.indexNumber,
+            r.moduleCode,
+            r.grade,
+            r.status,
+            userEdits,
+          );
+
           const effective = effectiveResult({
             originalGrade: null,
             originalStatus: null,
-            repeatGrade: r.grade as Grade | null,
-            repeatStatus: r.status,
+            repeatGrade: resolved.workingGrade as Grade | null,
+            repeatStatus: resolved.workingStatus,
             config,
           });
 
@@ -394,8 +521,15 @@ export function calculateStudentSearch(
               ? null
               : gradePoints(gpaGrade, config.gradeScale);
 
+          const rowFlags = resolved.isEdited && !r.flags.includes('edited')
+            ? [...r.flags, 'edited' as const]
+            : r.flags;
+
           return {
-            row: r,
+            row: {
+              ...r,
+              flags: rowFlags,
+            },
             courseName: rSheet.courseName,
             sheetId: rSheet.id,
             sheetDisplayName: rSheet.displayName,
@@ -408,12 +542,16 @@ export function calculateStudentSearch(
             resitInfo: {
               originalGrade: null,
               originalStatus: null,
-              repeatGrade: r.grade,
-              repeatStatus: r.status,
+              repeatGrade: resolved.workingGrade,
+              repeatStatus: resolved.workingStatus,
               capped: false,
               note: 'No original sheet found — counts in resit session (spec A2)',
               noOriginalFound: true,
             },
+            originalGrade: r.grade,
+            originalStatus: r.status,
+            editedValue: resolved.editedValue,
+            isEdited: resolved.isEdited,
           };
         });
 
@@ -447,6 +585,7 @@ export function calculateStudentSearch(
           totalCredits,
           totalCourseCredits: semTotalCourseCredits,
           totalModules: semTotalModules,
+          hasGpa: moduleCount > 0,
         });
       }
     }
@@ -454,13 +593,27 @@ export function calculateStudentSearch(
 
   if (semesters.length === 0) return null;
 
-  // Compute overall CGPA across all active semesters
-  const allGpaInputs = semesters.flatMap((s) =>
-    s.rows.map((d) => ({
-      gpaGrade: d.excluded ? null : (d.effectiveGrade as Grade | null),
-      credits: d.credits,
-    })),
-  );
+  // Compute overall CGPA across all active semesters (spec §4 & M7)
+  // Deduplicate modules across semesters so no module is counted twice in CGPA
+  const cgpaModulesMap = new Map<string, GpaInput>();
+  for (const s of semesters) {
+    for (const d of s.rows) {
+      const norm = normalizeModuleCode(d.row.moduleCode);
+      const input: GpaInput = {
+        gpaGrade: d.excluded ? null : (d.effectiveGrade as Grade | null),
+        credits: d.credits,
+      };
+      if (!cgpaModulesMap.has(norm)) {
+        cgpaModulesMap.set(norm, input);
+      } else {
+        const existing = cgpaModulesMap.get(norm)!;
+        if (input.gpaGrade !== null || existing.gpaGrade === null) {
+          cgpaModulesMap.set(norm, input);
+        }
+      }
+    }
+  }
+  const allGpaInputs = Array.from(cgpaModulesMap.values());
 
   const {
     gpa: cgpa,
@@ -481,7 +634,8 @@ export function calculateStudentSearch(
   const totalModules = allDistinct.size;
   const totalCourseCredits = Array.from(allDistinct.values()).reduce((sum, cr) => sum + cr, 0);
 
-  const classification = classify(cgpa, config.classificationBands);
+  const hasCgpa = cgpaModuleCount > 0;
+  const classification = hasCgpa ? classify(cgpa, config.classificationBands) : null;
 
   return {
     indexNumber: foundIndexNumber ?? rawQuery,
@@ -492,6 +646,7 @@ export function calculateStudentSearch(
     totalCourseCredits,
     totalModules,
     classification,
+    hasCgpa,
   };
 }
 
@@ -560,6 +715,18 @@ export function useSessionStore(config: UniversityConfig) {
     }
   });
 
+  const [userEdits, setUserEdits] = useState<Record<string, string>>(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        const saved = sessionStorage.getItem(EDITS_KEY);
+        return saved ? JSON.parse(saved) : {};
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  });
+
   // Sync to sessionStorage
   useEffect(() => {
     try {
@@ -601,6 +768,16 @@ export function useSessionStore(config: UniversityConfig) {
     }
   }, [moduleExclusions]);
 
+  useEffect(() => {
+    try {
+      if (typeof sessionStorage !== 'undefined') {
+        sessionStorage.setItem(EDITS_KEY, JSON.stringify(userEdits));
+      }
+    } catch {
+      // Ignore quota errors
+    }
+  }, [userEdits]);
+
   /** Check if a course code is already loaded in the session (M4 duplicate check) */
   const checkDuplicate = useCallback(
     (courseCode: string, type?: 'original' | 'repeat-resit'): MockSheet | undefined => {
@@ -627,12 +804,65 @@ export function useSessionStore(config: UniversityConfig) {
 
   /** Replace an existing sheet (spec §3 flow 2: Replace swaps the old sheet for new one) */
   const replaceSheet = useCallback((existingId: string, newSheet: MockSheet) => {
-    setSheets((prev) => prev.map((s) => (s.id === existingId ? { ...newSheet, id: existingId } : s)));
+    setSheets((prev) =>
+      prev.map((s) => (s.id === existingId ? { ...newSheet, id: existingId } : s)),
+    );
   }, []);
 
-  /** Remove a sheet by id */
+  /** Remove a sheet by id and clean up orphaned edits/exclusions/credits */
   const removeSheet = useCallback((id: string) => {
-    setSheets((prev) => prev.filter((s) => s.id !== id));
+    setSheets((prev) => {
+      const remainingSheets = prev.filter((s) => s.id !== id);
+      const remainingNormMods = new Set(
+        remainingSheets.map((s) => normalizeModuleCode(s.courseCode)),
+      );
+
+      // Clean up orphaned edits: sheet-specific edits for removed sheet and
+      // general edits whose module code no longer exists in any remaining sheet
+      setUserEdits((prevEdits) => {
+        const nextEdits: Record<string, string> = {};
+        for (const [key, val] of Object.entries(prevEdits)) {
+          if (key.startsWith(`${id}:`)) {
+            // Sheet-specific edit for removed sheet - prune
+            continue;
+          }
+          if (key.includes(':')) {
+            const parts = key.split(':');
+            const mod = parts[parts.length - 1]; // last part is normMod
+            if (!remainingNormMods.has(mod)) {
+              // Module no longer exists in any remaining sheet - prune
+              continue;
+            }
+          }
+          nextEdits[key] = val;
+        }
+        return nextEdits;
+      });
+
+      // Clean up module exclusions for modules no longer in remaining sheets
+      setModuleExclusions((prevEx) => {
+        const nextEx: Record<string, boolean> = {};
+        for (const [mod, val] of Object.entries(prevEx)) {
+          if (remainingNormMods.has(normalizeModuleCode(mod))) {
+            nextEx[mod] = val;
+          }
+        }
+        return nextEx;
+      });
+
+      // Clean up manual credits for modules no longer in remaining sheets
+      setManualCredits((prevCredits) => {
+        const nextCredits: Record<string, number> = {};
+        for (const [mod, val] of Object.entries(prevCredits)) {
+          if (remainingNormMods.has(normalizeModuleCode(mod))) {
+            nextCredits[mod] = val;
+          }
+        }
+        return nextCredits;
+      });
+
+      return remainingSheets;
+    });
   }, []);
 
   /** Clear entire session */
@@ -641,12 +871,14 @@ export function useSessionStore(config: UniversityConfig) {
     setManualCredits({});
     setUserExclusions({});
     setModuleExclusions({});
+    setUserEdits({});
     try {
       if (typeof sessionStorage !== 'undefined') {
         sessionStorage.removeItem(STORAGE_KEY);
         sessionStorage.removeItem(MANUAL_CREDITS_KEY);
         sessionStorage.removeItem(EXCLUSIONS_KEY);
         sessionStorage.removeItem(MODULE_EXCLUSIONS_KEY);
+        sessionStorage.removeItem(EDITS_KEY);
       }
     } catch {
       // Ignore
@@ -660,6 +892,44 @@ export function useSessionStore(config: UniversityConfig) {
       [moduleCode.toUpperCase()]: Math.max(0, credits),
     }));
   }, []);
+
+  /** Set or update a manually corrected grade/status for a student's module (M6) */
+  const setGradeEdit = useCallback(
+    (indexNumber: string, moduleCode: string, newValue: string, sheetId?: string) => {
+      const normMod = normalizeModuleCode(moduleCode);
+      const normIdx = normalizeIndex(indexNumber);
+      const trimmed = newValue.trim();
+      if (!isValidGradeOrStatus(trimmed)) {
+        throw new Error(`Invalid grade or status: "${newValue}"`);
+      }
+      setUserEdits((prev) => {
+        const next = { ...prev };
+        if (sheetId) {
+          next[`${sheetId}:${normIdx}:${normMod}`] = trimmed;
+        }
+        next[`${normIdx}:${normMod}`] = trimmed;
+        return next;
+      });
+    },
+    [],
+  );
+
+  /** Clear an edited grade/status, restoring the original extracted value (M6) */
+  const clearGradeEdit = useCallback(
+    (indexNumber: string, moduleCode: string, sheetId?: string) => {
+      const normMod = normalizeModuleCode(moduleCode);
+      const normIdx = normalizeIndex(indexNumber);
+      setUserEdits((prev) => {
+        const next = { ...prev };
+        if (sheetId) {
+          delete next[`${sheetId}:${normIdx}:${normMod}`];
+        }
+        delete next[`${normIdx}:${normMod}`];
+        return next;
+      });
+    },
+    [],
+  );
 
   /** Toggle module-level inclusion/exclusion in GPA (green dot = include, red dot = exclude) */
   const toggleModule = useCallback((moduleCode: string) => {
@@ -730,14 +1000,25 @@ export function useSessionStore(config: UniversityConfig) {
   /** Search by index number */
   const searchStudent = useCallback(
     (rawQuery: string): StudentSearchResult | null => {
-      return calculateStudentSearch(sheets, rawQuery, config, manualCredits, userExclusions, moduleExclusions);
+      return calculateStudentSearch(
+        sheets,
+        rawQuery,
+        config,
+        manualCredits,
+        userExclusions,
+        moduleExclusions,
+        userEdits,
+      );
     },
-    [sheets, manualCredits, userExclusions, moduleExclusions, config],
+    [sheets, manualCredits, userExclusions, moduleExclusions, userEdits, config],
   );
 
   return {
     sheets,
     moduleExclusions,
+    userEdits,
+    setGradeEdit,
+    clearGradeEdit,
     toggleModule,
     addSheet,
     replaceSheet,
