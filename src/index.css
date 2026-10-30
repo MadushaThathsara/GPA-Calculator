@@ -359,6 +359,7 @@ code  { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.875e
 
 /* ── Green / Red Module Dot Toggle Button ────────────────────────────────── */
 .module-dot-btn {
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -371,6 +372,16 @@ code  { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.875e
   padding: 0;
   flex-shrink: 0;
   transition: transform var(--t-fast), border-color var(--t-fast), background var(--t-fast), box-shadow var(--t-fast);
+}
+
+/* Ensure comfortable tap target on touch devices (WCAG 2.5.5 / 2.5.8) */
+.module-dot-btn::after {
+  content: '';
+  position: absolute;
+  top: -9px;
+  bottom: -9px;
+  left: -9px;
+  right: -9px;
 }
 
 .module-dot-btn:hover {
@@ -1110,12 +1121,82 @@ code  { font-family: 'JetBrains Mono', 'Fira Code', monospace; font-size: 0.875e
   box-shadow: 0 4px 12px rgba(239, 68, 68, 0.35);
 }
 
-/* ── App two-column → single column on narrow screens ────────────────────── */
-@media (max-width: 860px) {
-  /* The inline grid in App.tsx collapses via min() clamp on the template */
-  .app-main [style*="grid-template-columns"] {
-    display: flex !important;
-    flex-direction: column !important;
+/* ── Accessible Focus Visible (WCAG 2.4.7) ──────────────────────────────── */
+:focus-visible {
+  outline: 2px solid var(--accent-1);
+  outline-offset: 2px;
+}
+
+/* ── Main App Layout & Responsive Breakpoints ────────────────────────────── */
+.app-layout {
+  display: grid;
+  grid-template-columns: minmax(300px, 380px) 1fr;
+  gap: 1.75rem;
+  align-items: start;
+}
+
+@media (max-width: 900px) {
+  .app-layout {
+    grid-template-columns: 1fr;
+    gap: 1.25rem;
+  }
+}
+
+@media (max-width: 640px) {
+  .container {
+    padding-inline: 1rem;
+  }
+  .stat-chips {
+    display: none;
+  }
+  .semester-header {
+    flex-wrap: wrap;
+    padding: 0.875rem 1rem;
+  }
+  .gpa-summary {
+    grid-template-columns: 1fr 1fr;
+    padding: 1rem;
+    gap: 0.75rem;
+  }
+  .results-table th,
+  .results-table td {
+    padding-inline: 0.5rem;
+  }
+  .results-table th:first-child,
+  .results-table td:first-child {
+    padding-left: 0.75rem;
+  }
+  .course-summary-card {
+    padding: 1rem;
+  }
+}
+
+@media (max-width: 480px) {
+  .course-summary-grid {
+    grid-template-columns: 1fr 1fr;
+    gap: 0.625rem;
+  }
+  .summary-stat-box {
+    padding: 0.75rem 0.5rem;
+  }
+  .summary-stat-box__value {
+    font-size: 1.35rem;
+  }
+  .modal-card {
+    padding: 1.25rem;
+    border-radius: var(--r-lg);
+  }
+}
+
+@media (max-width: 380px) {
+  .container {
+    padding-inline: 0.75rem;
+  }
+  .gpa-summary {
+    grid-template-columns: 1fr;
+  }
+  .course-summary-grid {
+    grid-template-columns: 1fr;
   }
 }
 

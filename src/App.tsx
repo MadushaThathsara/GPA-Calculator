@@ -182,15 +182,8 @@ const App: FC = () => {
             </span>
           </div>
 
-          {/* ── Two-column layout ── */}
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'clamp(300px, 35%, 420px) 1fr',
-              gap: '1.75rem',
-              alignItems: 'start',
-            }}
-          >
+          {/* ── Main App Layout (responsive sidebar + content) ── */}
+          <div className="app-layout">
             {/* ══ LEFT: Upload & Sheets panel ══ */}
             <aside aria-label="Upload and manage result sheets">
               <div className="card animate-in">

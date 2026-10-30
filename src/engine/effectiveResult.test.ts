@@ -133,32 +133,138 @@ describe('effectiveResult — Specification §4 Repeat/Resit Table', () => {
     });
   });
 
-  // ── Eligible original with repeat E-statuses ─────────────────────────────────
+  // ── Eligible original with repeat E-statuses & non-replacing statuses ────────
   describe('Eligible original with repeat failure statuses', () => {
-    it('Original D + repeat status E(ESA) -> repeat E(ESA) is excluded from GPA', () => {
-      const res = effectiveResult({
+    it('Repeat statuses (AB, AB(ESA), E(CA), E(ESA), N, W) must not replace original result', () => {
+      // Original D + repeat E(ESA) -> original D remains
+      const resD = effectiveResult({
         originalGrade: 'D',
         originalStatus: null,
         repeatGrade: null,
         repeatStatus: 'E(ESA)',
         config: uocConfig,
       });
-      expect(res.gpaGrade).toBeNull();
-      expect(res.capped).toBe(false);
-      expect(res.excluded).toBe(true);
-    });
+      expect(resD.gpaGrade).toBe('D');
+      expect(resD.capped).toBe(false);
+      expect(resD.excluded).toBe(false);
 
-    it('Original C- + repeat status E(CA) -> repeat E(CA) is excluded from GPA', () => {
-      const res = effectiveResult({
+      // Original C- + repeat E(CA) -> original C- remains
+      const resC = effectiveResult({
         originalGrade: 'C-',
         originalStatus: null,
         repeatGrade: null,
         repeatStatus: 'E(CA)',
         config: uocConfig,
       });
-      expect(res.gpaGrade).toBeNull();
-      expect(res.capped).toBe(false);
-      expect(res.excluded).toBe(true);
+      expect(resC.gpaGrade).toBe('C-');
+      expect(resC.capped).toBe(false);
+      expect(resC.excluded).toBe(false);
+    });
+
+    // ── M9 Audit Part 2: Dedicated 7 E(CA) / E(ESA) Repeat Scenarios ────────
+    describe('M9 Part 2 — Required 7 E(CA) / E(ESA) Repeat Scenarios', () => {
+      // Scenario 1: Original E(CA) + repeat A -> B (3.0)
+      it('Scenario 1: Original E(CA) + repeat A -> B (3.0, capped)', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(CA)',
+          repeatGrade: 'A',
+          repeatStatus: null,
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBe('B');
+        expect(res.capped).toBe(true);
+        expect(res.excluded).toBe(false);
+        expect(uocConfig.gradeScale[res.gpaGrade!]).toBe(3.0);
+      });
+
+      // Scenario 2: Original E(CA) + repeat B+ -> B (3.0)
+      it('Scenario 2: Original E(CA) + repeat B+ -> B (3.0, capped)', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(CA)',
+          repeatGrade: 'B+',
+          repeatStatus: null,
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBe('B');
+        expect(res.capped).toBe(true);
+        expect(res.excluded).toBe(false);
+        expect(uocConfig.gradeScale[res.gpaGrade!]).toBe(3.0);
+      });
+
+      // Scenario 3: Original E(CA) + repeat B -> B (3.0)
+      it('Scenario 3: Original E(CA) + repeat B -> B (3.0, uncapped)', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(CA)',
+          repeatGrade: 'B',
+          repeatStatus: null,
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBe('B');
+        expect(res.capped).toBe(false);
+        expect(res.excluded).toBe(false);
+        expect(uocConfig.gradeScale[res.gpaGrade!]).toBe(3.0);
+      });
+
+      // Scenario 4: Original E(CA) + repeat C+ -> C+ (actual grade)
+      it('Scenario 4: Original E(CA) + repeat C+ -> C+ (2.3, actual grade)', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(CA)',
+          repeatGrade: 'C+',
+          repeatStatus: null,
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBe('C+');
+        expect(res.capped).toBe(false);
+        expect(res.excluded).toBe(false);
+        expect(uocConfig.gradeScale[res.gpaGrade!]).toBe(2.3);
+      });
+
+      // Scenario 5: Original E(CA) + repeat AB -> original E(CA) remains effective and excluded
+      it('Scenario 5: Original E(CA) + repeat AB -> original E(CA) remains effective and excluded', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(CA)',
+          repeatGrade: null,
+          repeatStatus: 'AB',
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBeNull();
+        expect(res.capped).toBe(false);
+        expect(res.excluded).toBe(true);
+      });
+
+      // Scenario 6: Original E(ESA) + repeat A -> B (3.0)
+      it('Scenario 6: Original E(ESA) + repeat A -> B (3.0, capped)', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(ESA)',
+          repeatGrade: 'A',
+          repeatStatus: null,
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBe('B');
+        expect(res.capped).toBe(true);
+        expect(res.excluded).toBe(false);
+        expect(uocConfig.gradeScale[res.gpaGrade!]).toBe(3.0);
+      });
+
+      // Scenario 7: Original E(CA) without a repeat -> excluded from GPA
+      it('Scenario 7: Original E(CA) without a repeat -> excluded from GPA', () => {
+        const res = effectiveResult({
+          originalGrade: null,
+          originalStatus: 'E(CA)',
+          repeatGrade: null,
+          repeatStatus: null,
+          config: uocConfig,
+        });
+        expect(res.gpaGrade).toBeNull();
+        expect(res.capped).toBe(false);
+        expect(res.excluded).toBe(true);
+      });
     });
 
     it('Original status E(ESA) + repeat A -> capped at B (3.0)', () => {

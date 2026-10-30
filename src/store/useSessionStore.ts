@@ -240,7 +240,7 @@ export function calculateStudentSearch(
   const originalSheets = sheets.filter((s) => s.type !== 'repeat-resit');
   const repeatSheets = sheets.filter((s) => s.type === 'repeat-resit');
 
-  // Map to find repeat rows for this student: key = courseCode
+  // Map to find repeat rows for this student: key = normalized courseCode
   // Multi-resit handling (spec Assumption A3):
   // Collect all repeat entries for each course code, then select the latest gradable one.
   // Ungradable results (AB, N, W) must never overwrite a previously valid gradable resit.
@@ -248,11 +248,11 @@ export function calculateStudentSearch(
   repeatSheets.forEach((rSheet, order) => {
     for (const row of rSheet.rows) {
       if (normalizeIndex(row.indexNumber).includes(q)) {
-        const code = rSheet.courseCode.toUpperCase();
-        if (!repeatCandidates.has(code)) {
-          repeatCandidates.set(code, []);
+        const normCode = normalizeModuleCode(rSheet.courseCode);
+        if (!repeatCandidates.has(normCode)) {
+          repeatCandidates.set(normCode, []);
         }
-        repeatCandidates.get(code)!.push({ sheet: rSheet, row, order });
+        repeatCandidates.get(normCode)!.push({ sheet: rSheet, row, order });
       }
     }
   });
@@ -267,7 +267,7 @@ export function calculateStudentSearch(
       editedValue: string | null;
     }
   >();
-  for (const [code, candidates] of repeatCandidates.entries()) {
+  for (const [normCode, candidates] of repeatCandidates.entries()) {
     const resolvedCandidates = candidates.map((c) => {
       const resolved = resolveRowGradeStatus(
         c.sheet.id,
@@ -289,7 +289,7 @@ export function calculateStudentSearch(
     const pool = gradable.length > 0 ? gradable : resolvedCandidates;
     pool.sort((a, b) => b.order - a.order);
     const best = pool[0];
-    studentRepeatRows.set(code, {
+    studentRepeatRows.set(normCode, {
       row: best.row,
       workingGrade: best.resolved.workingGrade,
       workingStatus: best.resolved.workingStatus,
@@ -349,8 +349,8 @@ export function calculateStudentSearch(
           userEdits,
         );
 
-        // Check for repeat result
-        const repeatInfo = studentRepeatRows.get(modCode);
+        // Check for repeat result (lookup by normalized module code)
+        const repeatInfo = studentRepeatRows.get(normCode) ?? studentRepeatRows.get(modCode);
         let resitInfo: ResitDetail | undefined;
         let effective;
 
@@ -477,7 +477,10 @@ export function calculateStudentSearch(
   // Handle students appearing only on repeat sheets (spec Assumption A2)
   for (const rSheet of repeatSheets) {
     const modCode = rSheet.courseCode.toUpperCase();
-    const alreadyCovered = originalSheets.some((s) => s.courseCode.toUpperCase() === modCode);
+    const normModCode = normalizeModuleCode(rSheet.courseCode);
+    const alreadyCovered = originalSheets.some(
+      (s) => normalizeModuleCode(s.courseCode) === normModCode,
+    );
     if (!alreadyCovered) {
       const matchingRepeatRows = rSheet.rows.filter((r) =>
         normalizeIndex(r.indexNumber).includes(q),
@@ -778,13 +781,13 @@ export function useSessionStore(config: UniversityConfig) {
     }
   }, [userEdits]);
 
-  /** Check if a course code is already loaded in the session (M4 duplicate check) */
+  /** Check if a course code is already loaded in the session (M4/M8 duplicate check) */
   const checkDuplicate = useCallback(
     (courseCode: string, type?: 'original' | 'repeat-resit'): MockSheet | undefined => {
-      const cleanCode = courseCode.trim().toUpperCase();
+      const cleanCode = normalizeModuleCode(courseCode);
       return sheets.find(
         (s) =>
-          s.courseCode.trim().toUpperCase() === cleanCode &&
+          normalizeModuleCode(s.courseCode) === cleanCode &&
           (type ? (s.type ?? 'original') === type : true),
       );
     },

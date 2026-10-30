@@ -5,7 +5,7 @@
  * Cleans up uploaded sheets, extracted records, grade corrections, and selections.
  */
 
-import type { FC } from 'react';
+import { useEffect, type FC } from 'react';
 
 interface ConfirmClearModalProps {
   onConfirm: () => void;
@@ -13,12 +13,25 @@ interface ConfirmClearModalProps {
 }
 
 const ConfirmClearModal: FC<ConfirmClearModalProps> = ({ onConfirm, onCancel }) => {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onCancel]);
+
   return (
     <div
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-labelledby="clear-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
     >
       <div className="modal-card animate-in">
         <div className="modal-header">

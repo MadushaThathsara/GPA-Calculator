@@ -205,6 +205,8 @@ const SheetsList: FC<SheetsListProps> = ({
                 type="button"
                 className={`module-dot-btn ${isExcluded ? 'module-dot-btn--red' : 'module-dot-btn--green'}`}
                 onClick={() => onToggleModule?.(sheet.courseCode)}
+                role="switch"
+                aria-checked={!isExcluded}
                 aria-label={`${sheet.courseCode} is ${isExcluded ? 'excluded from' : 'included in'} GPA calculations. Click to ${isExcluded ? 'include' : 'exclude'}.`}
                 title={`${sheet.courseCode}: ${isExcluded ? 'Excluded from GPA (Click to include)' : 'Included in GPA (Click to exclude)'}`}
               >

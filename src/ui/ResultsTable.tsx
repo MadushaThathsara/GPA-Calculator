@@ -117,7 +117,12 @@ const ResultsTable: FC<ResultsTableProps> = ({
         role="button"
         tabIndex={0}
         aria-expanded={open}
-        onKeyDown={(e) => e.key === 'Enter' && setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            setOpen((o) => !o);
+          }
+        }}
         id={`semester-${result.semesterName.replace(/\s+/g, '-')}-header`}
       >
         <div className="semester-header__left">
@@ -255,6 +260,8 @@ const ResultsTable: FC<ResultsTableProps> = ({
                                 onToggleExclude?.(studentIndexNumber, row.moduleCode);
                               }
                             }}
+                            role="switch"
+                            aria-checked={!isUserExcluded}
                             aria-label={`${row.moduleCode} is ${isUserExcluded ? 'excluded from' : 'included in'} GPA calculations. Click to ${isUserExcluded ? 'include' : 'exclude'}.`}
                             title={`${row.moduleCode}: ${isUserExcluded ? 'Excluded from GPA (Click to include)' : 'Included in GPA (Click to exclude)'}`}
                           >

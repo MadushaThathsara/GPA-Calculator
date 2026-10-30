@@ -53,24 +53,28 @@ const AB_TYPE_STATUSES = new Set([
 // Statuses that leave the original unchanged regardless of repeat
 const NEUTRAL_ORIGINAL_STATUSES = new Set(['N', 'W']);
 
-// AB and neutral statuses in the repeat slot → original is unchanged (spec §4 & Assumption A4)
-const AB_REPEAT_STATUSES = new Set([
+// Repeat statuses that must NOT replace the original result (spec §4 & M9 audit):
+// AB, AB(ESA), E(CA), E(ESA), N, and W
+const NON_REPLACING_REPEAT_STATUSES = new Set([
   'AB',
   'AB(ESA)',
   'AB(CA)',
   'AB(CA) & AB(ESA)',
   'E(CA) & AB(ESA)',
+  'E(CA)',
+  'E(ESA)',
+  'N',
+  'W',
 ]);
-const NEUTRAL_REPEAT_STATUSES = new Set(['N', 'W']);
 
 /**
  * Checks whether a repeat attempt is gradable (has a letter grade or in-GPA fail status).
- * Ungradable results (AB, N, W) must not overwrite earlier gradable resits (spec Assumption A3).
+ * Ungradable results (AB, N, W, E(CA), E(ESA)) must not overwrite earlier gradable resits (spec Assumption A3).
  */
 export function isGradableResit(grade: string | null, status: string | null): boolean {
   if (grade !== null && grade !== 'E(CA)' && grade !== 'E(ESA)') return true;
   if (status !== null) {
-    if (AB_REPEAT_STATUSES.has(status) || NEUTRAL_REPEAT_STATUSES.has(status)) {
+    if (NON_REPLACING_REPEAT_STATUSES.has(status)) {
       return false;
     }
     // Only 'E' is an in-GPA failure status (counts as 0.0)
@@ -103,11 +107,8 @@ export function effectiveResult(input: EffectiveResultInput): EffectiveResult {
     return resolveOriginalOnly(originalGrade, originalStatus, statusRules);
   }
 
-  // ── If the repeat result is AB, N, or W → original unchanged (spec §4 & A4) ──
-  if (
-    repeatStatus !== null &&
-    (AB_REPEAT_STATUSES.has(repeatStatus) || NEUTRAL_REPEAT_STATUSES.has(repeatStatus))
-  ) {
+  // ── If the repeat result is AB, AB(ESA), E(CA), E(ESA), N, or W → original unchanged ──
+  if (repeatStatus !== null && NON_REPLACING_REPEAT_STATUSES.has(repeatStatus)) {
     return resolveOriginalOnly(originalGrade, originalStatus, statusRules);
   }
 

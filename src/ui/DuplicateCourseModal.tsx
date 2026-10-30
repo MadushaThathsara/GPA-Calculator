@@ -10,7 +10,7 @@
  * also be a sheet for absent students."
  */
 
-import type { FC } from 'react';
+import { useEffect, type FC } from 'react';
 import type { MockSheet } from '../store/useSessionStore';
 
 interface DuplicateCourseModalProps {
@@ -28,12 +28,25 @@ const DuplicateCourseModal: FC<DuplicateCourseModalProps> = ({
   onKeepRepeatResit,
   onCancel,
 }) => {
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onCancel();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [onCancel]);
+
   return (
     <div
       className="modal-backdrop"
       role="dialog"
       aria-modal="true"
       aria-labelledby="dup-modal-title"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onCancel();
+      }}
     >
       <div className="modal-card animate-in">
         <div className="modal-header">
@@ -60,7 +73,7 @@ const DuplicateCourseModal: FC<DuplicateCourseModalProps> = ({
           <div
             style={{
               display: 'grid',
-              gridTemplateColumns: '1fr 1fr',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
               gap: '0.75rem',
               marginBottom: '1.25rem',
               padding: '0.875rem',

@@ -573,7 +573,12 @@ const UploadZone: FC<UploadZoneProps> = ({ onSheetParsed }) => {
         role="button"
         tabIndex={0}
         aria-label="Upload result-sheet PDFs"
-        onKeyDown={(e) => e.key === 'Enter' && inputRef.current?.click()}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            if (!isProcessing) inputRef.current?.click();
+          }
+        }}
       >
         <input
           ref={inputRef}

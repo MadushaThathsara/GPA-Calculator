@@ -325,8 +325,17 @@ export function parseSemesterHeading(text: string): SemesterHeadingResult {
     return { semesterNumber: null, examYear: null, examSession: null, matchedText: null };
   }
 
+  // Pre-normalize font-kerning space splits in keywords (e.g. "Semeste r" -> "Semester")
+  const normText = text
+    .replace(/\bS\s*e\s*m\s*e\s*s\s*t\s*e\s*r\b/gi, 'Semester')
+    .replace(/\bE\s*x\s*a\s*m\s*i\s*n\s*a\s*t\s*i\s*o\s*n\b/gi, 'Examination')
+    .replace(/\bS\s*e\s*c\s*o\s*n\s*d\b/gi, 'Second')
+    .replace(/\bF\s*i\s*r\s*s\s*t\b/gi, 'First')
+    .replace(/\bT\s*h\s*i\s*r\s*d\b/gi, 'Third')
+    .replace(/\bF\s*o\s*u\s*r\s*t\s*h\b/gi, 'Fourth');
+
   // 1. Try Pattern 1: "(First|Second|...) Semester [Examination] [in|-] (YYYY[/YYYY])"
-  let m = PATTERN_SEMESTER_FIRST.exec(text);
+  let m = PATTERN_SEMESTER_FIRST.exec(normText);
   if (m) {
     const rawSem = m[1].toLowerCase();
     const semInfo = SEMESTER_WORD_MAP[rawSem];
@@ -342,7 +351,7 @@ export function parseSemesterHeading(text: string): SemesterHeadingResult {
   }
 
   // 2. Try Pattern 2: "Semester (1|2|I|II|First|Second) [Examination] [in|-] (YYYY[/YYYY])"
-  m = PATTERN_SEMESTER_SECOND.exec(text);
+  m = PATTERN_SEMESTER_SECOND.exec(normText);
   if (m) {
     const rawSem = m[1].toLowerCase();
     const semInfo = SEMESTER_WORD_MAP[rawSem];
@@ -358,7 +367,7 @@ export function parseSemesterHeading(text: string): SemesterHeadingResult {
   }
 
   // 3. Try Pattern 3: "Examination [in] (YYYY) ... (First|Second) Semester"
-  m = PATTERN_EXAM_FIRST.exec(text);
+  m = PATTERN_EXAM_FIRST.exec(normText);
   if (m) {
     const examYear = m[1];
     const rawSem = m[2].toLowerCase();
@@ -375,9 +384,9 @@ export function parseSemesterHeading(text: string): SemesterHeadingResult {
 
   // 4. Fallback: line contains Semester token and a 4-digit year token
   const semMatch =
-    /\b(First|Second|Third|Fourth|1st|2nd|3rd|4th)\s+Semester\b/i.exec(text) ||
-    /\bSemester\s+(First|Second|Third|Fourth|1st|2nd|3rd|4th|[1-4]|I{1,3}|IV)\b/i.exec(text);
-  const yearMatch = /\b(\d{4}(?:[\/\-]\d{2,4})?)\b/.exec(text);
+    /\b(First|Second|Third|Fourth|1st|2nd|3rd|4th)\s+Semester\b/i.exec(normText) ||
+    /\bSemester\s+(First|Second|Third|Fourth|1st|2nd|3rd|4th|[1-4]|I{1,3}|IV)\b/i.exec(normText);
+  const yearMatch = /\b(\d{4}(?:[\/\-]\d{2,4})?)\b/.exec(normText);
 
   if (semMatch) {
     const rawSem = semMatch[1].toLowerCase();
@@ -448,15 +457,31 @@ export function parseSheetHeader(rows: PdfTextItem[][]): SheetHeader {
       if (m) date = m[0].trim();
     }
 
+    // Dedicated Course Name field extraction, e.g. "Course Name : Database Systems"
+    const nameMatch = /Course\s+Name\s*[:\-]\s*(.+)/i.exec(text);
+    if (nameMatch) {
+      const rawName = nameMatch[1].trim();
+      const cleanName = rawName
+        .replace(/\s+(?:Course\s+Code|Date|Medium|Sheet|Page)\s*[:\-].*$/i, '')
+        .trim();
+      if (cleanName.length > 0) {
+        courseName = cleanName;
+      }
+    }
+
     if (courseCode === null) {
       const m = COURSE_CODE_RE.exec(text);
       if (m) {
         // Normalise: remove any internal space → "IIC2242"
         courseCode = (m[1] + m[2]).toUpperCase();
-        // The course name is the rest of the line after the code
+        // The course name is the rest of the line after the code ONLY IF not already set and not metadata
         const afterCode = text.slice(text.indexOf(m[0]) + m[0].length).trim();
-        if (afterCode.length > 0) {
-          courseName = afterCode;
+        const cleanAfter = afterCode
+          .replace(/^(?:Medium|Date|Sheet|Page)\s*[:\-].*$/i, '')
+          .replace(/\s+(?:Medium|Date|Sheet|Page)\s*[:\-].*$/i, '')
+          .trim();
+        if (!courseName && cleanAfter.length > 0) {
+          courseName = cleanAfter;
         }
       }
     }
@@ -518,12 +543,30 @@ export function parseHeaderFromText(text: string): SheetHeader {
       if (m) date = m[0].trim();
     }
 
+    // Dedicated Course Name field extraction, e.g. "Course Name : Database Systems"
+    const nameMatch = /Course\s+Name\s*[:\-]\s*(.+)/i.exec(line);
+    if (nameMatch) {
+      const rawName = nameMatch[1].trim();
+      const cleanName = rawName
+        .replace(/\s+(?:Course\s+Code|Date|Medium|Sheet|Page)\s*[:\-].*$/i, '')
+        .trim();
+      if (cleanName.length > 0) {
+        courseName = cleanName;
+      }
+    }
+
     if (courseCode === null) {
       const m = COURSE_CODE_RE.exec(line);
       if (m) {
         courseCode = (m[1] + m[2]).toUpperCase();
         const afterCode = line.slice(line.indexOf(m[0]) + m[0].length).trim();
-        if (afterCode.length > 0) courseName = afterCode;
+        const cleanAfter = afterCode
+          .replace(/^(?:Medium|Date|Sheet|Page)\s*[:\-].*$/i, '')
+          .replace(/\s+(?:Medium|Date|Sheet|Page)\s*[:\-].*$/i, '')
+          .trim();
+        if (!courseName && cleanAfter.length > 0) {
+          courseName = cleanAfter;
+        }
       }
     }
   }
